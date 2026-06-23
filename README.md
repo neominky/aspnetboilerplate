@@ -5,6 +5,66 @@
 [![MyGet (with prereleases)](https://img.shields.io/myget/abp-nightly/vpre/Abp.svg?style=flat-square)](https://aspnetboilerplate.com/Pages/Documents/Nightly-Builds)
 [![NuGet Download](https://img.shields.io/nuget/dt/Abp.svg?style=flat-square)](https://www.nuget.org/packages/Abp)
 
+## Fork Purpose
+
+This repository is a fork of [ASP.NET Boilerplate](https://github.com/aspnetboilerplate/aspnetboilerplate). It is maintained and evolved with goals that differ from the upstream project.
+
+### Goals
+
+1. **NativeAOT** — Restructure the framework for compatibility with ahead-of-time (AOT) compilation. The focus is on removing or replacing anything that relies on runtime code generation or dynamic assembly loading with compile-time alternatives.
+2. **Modernization** — Bring .NET, dependency packages, and build/deploy practices up to current standards.
+3. **Remove and replace AutoMapper** — Drop the `Abp.AutoMapper` integration and AutoMapper itself. Object-to-object mapping will move to compile-time alternatives (e.g. source generators) so mapping stays AOT-friendly and free of runtime reflection-based configuration.
+
+### Migration Roadmap
+
+To reach these goals, **Castle.Windsor** is removed first, then **AutoMapper**. ABP depends heavily on the Castle stack for IoC and interception (auditing, validation, unit of work, and more), and on AutoMapper for DTO mapping across application services. Both rely on runtime reflection and dynamic configuration, which are major barriers to NativeAOT and alignment with the modern .NET ecosystem.
+
+| Step | Task | Description |
+|:-----|:-----|:------------|
+| 1 | **DynamicProxy → Source Generator** | Replace `Castle.DynamicProxy` runtime proxies with source generators. Interceptor and proxy logic is emitted at compile time so it works with AOT trimming. |
+| 2 | **Replace IoC → Remove Castle.Windsor** | Migrate IoC to a standard DI container such as `Microsoft.Extensions.DependencyInjection`, then fully remove Castle.Windsor and related packages. |
+| 3 | **AutoMapper → Source Generator** | Replace `AutoMapper` / `Abp.AutoMapper` with compile-time mapping (source generators). Remove runtime profile scanning and expression-tree mapping in favor of generated `Map` methods. |
+
+```
+Remove Castle.Windsor
+    ├── Step 1: DynamicProxy → Source Generator
+    └── Step 2: Replace IoC (MS.DI, etc.)
+            └── NativeAOT · Modernization
+Remove AutoMapper
+    └── Step 3: AutoMapper → Source Generator
+            └── NativeAOT · Modernization
+```
+
+### 한국어
+
+이 저장소는 [ASP.NET Boilerplate](https://github.com/aspnetboilerplate/aspnetboilerplate)의 포크이며, 원본 프로젝트의 방향과는 별도의 목표를 가지고 유지·발전시킵니다.
+
+**목표**
+
+1. **NativeAOT** — AOT(Ahead-of-Time) 컴파일과 호환되도록 프레임워크를 재구성합니다. 런타임 코드 생성·동적 어셈블리 로딩에 의존하는 부분을 제거하거나 컴파일 타임 대안으로 대체하는 것이 핵심입니다.
+2. **최신화** — .NET, 의존성 패키지, 빌드·배포 방식을 현재 표준에 맞게 갱신합니다.
+3. **AutoMapper 제거 및 대체** — `Abp.AutoMapper` 연동과 AutoMapper 자체를 제거합니다. 객체 간 매핑은 소스 생성기 등 컴파일 타임 방식으로 대체하여 AOT과 호환되고 런타임 리플렉션 기반 설정이 없도록 합니다.
+
+**마이그레이션 로드맵**
+
+이 목표들을 달성하기 위해 **Castle.Windsor**를 가장 먼저 제거하고, 이어서 **AutoMapper**를 제거합니다. ABP는 IoC와 인터셉션(감사, 유효성 검사, 단위 of work 등)에 Castle 스택에, 애플리케이션 서비스의 DTO 매핑에 AutoMapper에 깊이 의존하고 있습니다. 둘 다 런타임 리플렉션과 동적 설정에 기반하며, NativeAOT와 최신 .NET 생태계와의 괴리를 만드는 주요 원인입니다.
+
+| 단계 | 작업 | 설명 |
+|:-----|:-----|:-----|
+| 1 | **DynamicProxy → 소스 생성기** | `Castle.DynamicProxy` 기반 런타임 프록시를 소스 생성기(Source Generator)로 대체합니다. 인터셉터·프록시 로직을 컴파일 타임에 생성하여 AOT 트리밍과 호환되게 합니다. |
+| 2 | **IoC 대체 → Castle.Windsor 제거** | `Microsoft.Extensions.DependencyInjection` 등 표준 DI 컨테이너로 IoC를 이전한 뒤 Castle.Windsor 및 관련 패키지를 완전히 제거합니다. |
+| 3 | **AutoMapper → 소스 생성기** | `AutoMapper` / `Abp.AutoMapper`를 컴파일 타임 매핑(소스 생성기)으로 대체합니다. 런타임 프로필 스캔과 expression-tree 매핑을 제거하고, 생성된 `Map` 메서드로 전환합니다. |
+
+```
+Castle.Windsor 제거
+    ├── 1단계: DynamicProxy → Source Generator
+    └── 2단계: IoC 대체 (MS.DI 등)
+            └── NativeAOT · 최신화
+AutoMapper 제거
+    └── 3단계: AutoMapper → Source Generator
+            └── NativeAOT · 최신화
+```
+
 > ### End of Support Announcement
 > Support for ASP.NET Boilerplate will officially end in **May 2026**. However, we will continue to provide support for [ASP.NET Zero](https://aspnetzero.com/?utm_source=referral&utm_medium=github&utm_campaign=github_zerowebsite_redirection) **customers** using ASP.NET Boilerplate. For those looking for an open-source alternative, we recommend migrating to [ABP Framework](https://abp.io/?utm_source=referral&utm_medium=github&utm_campaign=github_abpwebsite_redirection). For the full story, [read the end of life announcement](https://aspnetboilerplate.com/endofsupport?utm_source=referral&utm_medium=github&utm_campaign=github_zboilerplate_announcement_redirection).
 

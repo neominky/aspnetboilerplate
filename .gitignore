@@ -139,3 +139,4 @@ output/test-results/*
 # Don't ignore the Dapper-Extensions Sql folder
 # This is needed for Dapper-Extensions to work properly
 !src/Abp.Dapper/Dapper-Extensions/Sql/
+/.github/copilot-instructions.md
