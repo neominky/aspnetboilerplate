@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<linker>
+  <assembly fullname="Castle.Core" preserve="all" />
+  <assembly fullname="Castle.Windsor" preserve="all" />
+  <assembly fullname="Castle.Core.AsyncInterceptor" preserve="all" />
+  <assembly fullname="Castle.LoggingFacility" preserve="all" />
+  <assembly fullname="Abp" preserve="all" />
+  <assembly fullname="Abp.AspNetCore" preserve="all" />
+  <assembly fullname="Abp.SourceGenerators.Runtime" preserve="all" />
+  <assembly fullname="Abp.NativeAot.SampleWebApp" preserve="all" />
+</linker>

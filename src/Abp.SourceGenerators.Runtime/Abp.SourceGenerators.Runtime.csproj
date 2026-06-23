@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\common.props" />
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <AssemblyName>Abp.SourceGenerators.Runtime</AssemblyName>
+    <RootNamespace>Abp.Dependency.CompileTime</RootNamespace>
+    <Description>Runtime support for Abp.SourceGenerators compile-time IoC and interception.</Description>
+    <IsPackable>false</IsPackable>
+	<Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Abp\Abp.csproj" />
+  </ItemGroup>
+</Project>
