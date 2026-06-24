@@ -4,7 +4,7 @@ using System.Threading;
 namespace Abp.Dependency.CompileTime
 {
     /// <summary>
-    /// Carries aspect executor and options across Roslyn interceptor boundaries via AsyncLocal.
+    /// Carries invocation and interceptors across Roslyn interceptor boundaries via AsyncLocal.
     /// </summary>
     public static class CompileTimeInterceptorContext
     {
@@ -12,22 +12,30 @@ namespace Abp.Dependency.CompileTime
 
         public static Scope? Current => CurrentScope.Value;
 
-        public static IDisposable Enter(CompileTimeAspectExecutor executor, CompileTimeMethodAspectOptions options)
+        public static IDisposable Enter(IAbpInvocation invocation)
         {
-            var scope = new Scope(executor, options);
+            var scope = new Scope(invocation, Array.Empty<AbpInterceptorBase>());
+            CurrentScope.Value = scope;
+            return scope;
+        }
+
+        public static IDisposable Enter(IAbpInvocation invocation, AbpInterceptorBase[] interceptors)
+        {
+            var scope = new Scope(invocation, interceptors);
             CurrentScope.Value = scope;
             return scope;
         }
 
         public sealed class Scope : IDisposable
         {
-            public CompileTimeAspectExecutor Executor { get; }
-            public CompileTimeMethodAspectOptions Options { get; }
+            public IAbpInvocation Invocation { get; }
 
-            public Scope(CompileTimeAspectExecutor executor, CompileTimeMethodAspectOptions options)
+            public AbpInterceptorBase[] Interceptors { get; }
+
+            public Scope(IAbpInvocation invocation, AbpInterceptorBase[] interceptors)
             {
-                Executor = executor;
-                Options = options;
+                Invocation = invocation;
+                Interceptors = interceptors;
             }
 
             public void Dispose()

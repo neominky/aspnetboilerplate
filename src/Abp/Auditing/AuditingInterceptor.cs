@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using Abp.Aspects;
 using Abp.Dependency;
-using Castle.DynamicProxy;
 
 namespace Abp.Auditing
 {
@@ -23,7 +22,7 @@ namespace Abp.Auditing
             _auditSerializer = auditSerializer;
         }
 
-        public override void InterceptSynchronous(IInvocation invocation)
+        public override void InterceptSynchronous(IAbpInvocation invocation)
         {
             if (AbpCrossCuttingConcerns.IsApplied(invocation.InvocationTarget, AbpCrossCuttingConcerns.Auditing))
             {
@@ -64,7 +63,7 @@ namespace Abp.Auditing
             }
         }
 
-        protected override async Task InternalInterceptAsynchronous(IInvocation invocation)
+        protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
 
@@ -108,7 +107,7 @@ namespace Abp.Auditing
             }
         }
 
-        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IInvocation invocation)
+        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
 

@@ -29,7 +29,18 @@ internal sealed class MethodModel
     public string ReturnType { get; set; } = "";
     public bool IsAsync { get; set; }
     public bool Validate { get; set; }
+    public ImmutableArray<ParameterModel> Parameters { get; set; }
     public AspectModel Aspect { get; set; } = new AspectModel();
+}
+
+internal sealed class ParameterModel
+{
+    public string Name { get; set; } = "";
+    public string TypeName { get; set; } = "";
+    public int Position { get; set; }
+    public bool IsOptional { get; set; }
+    public bool HasDefaultValue { get; set; }
+    public string? DefaultValueExpression { get; set; }
 }
 
 internal sealed class AspectModel
@@ -37,10 +48,17 @@ internal sealed class AspectModel
     public bool Audit { get; set; }
     public bool Validate { get; set; }
     public bool AllowAnonymous { get; set; }
+    public bool HasUseCaseAttribute { get; set; }
+    public string? UseCaseDescriptionExpression { get; set; }
+    public bool ApplyConventionalUnitOfWork { get; set; }
+    public string? UnitOfWorkAttributeExpression { get; set; }
     public string? UnitOfWorkOptionsExpression { get; set; }
     public string? AuthorizeAttributesExpression { get; set; }
     public string? FeatureAttributesExpression { get; set; }
     public string AuditParametersExpression { get; set; } = "null";
+    public string AppliedAttributeTypesExpression { get; set; } = "global::System.Array.Empty<global::System.Type>()";
+    public string BakedAttributesExpression { get; set; } = "global::System.Array.Empty<object>()";
+    public ImmutableArray<string> BakedAttributeItems { get; set; }
 }
 
 internal static class ConventionModelCollector
@@ -59,6 +77,7 @@ internal static class ConventionModelCollector
         var singletonSymbol = compilation.GetTypeByMetadataName("Abp.Dependency.ISingletonDependency");
         var applicationServiceSymbol = compilation.GetTypeByMetadataName("Abp.Application.Services.IApplicationService");
         var disableSymbol = compilation.GetTypeByMetadataName("Abp.Dependency.CompileTime.DisableConventionalRegistrationAttribute");
+        var interceptorBaseSymbol = compilation.GetTypeByMetadataName("Abp.Dependency.AbpInterceptorBase");
 
         if (transientSymbol == null)
         {
@@ -83,6 +102,11 @@ internal static class ConventionModelCollector
             }
 
             if (disableSymbol != null && HasAttribute(symbol, disableSymbol))
+            {
+                continue;
+            }
+
+            if (interceptorBaseSymbol != null && InheritsFrom(symbol, interceptorBaseSymbol))
             {
                 continue;
             }
@@ -219,9 +243,36 @@ internal static class ConventionModelCollector
             ParameterList = parameterList,
             ArgumentList = argumentList,
             ReturnType = returnType,
-            IsAsync = returnType.StartsWith("System.Threading.Tasks.Task"),
+            IsAsync = IsAsyncReturnType(returnType),
             Validate = aspect.Validate,
+            Parameters = parameters.Select((p, index) => new ParameterModel
+            {
+                Name = p.Name,
+                TypeName = p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                Position = index,
+                IsOptional = p.IsOptional,
+                HasDefaultValue = p.HasExplicitDefaultValue,
+                DefaultValueExpression = p.HasExplicitDefaultValue
+                    ? FormatDefaultValue(p)
+                    : null
+            }).ToImmutableArray(),
             Aspect = aspect
+        };
+    }
+
+    private static string? FormatDefaultValue(IParameterSymbol parameter)
+    {
+        if (!parameter.HasExplicitDefaultValue)
+        {
+            return null;
+        }
+
+        return parameter.ExplicitDefaultValue switch
+        {
+            null => "null",
+            string s => $"\"{s}\"",
+            bool b => b.ToString().ToLowerInvariant(),
+            _ => parameter.ExplicitDefaultValue!.ToString()!
         };
     }
 
@@ -231,9 +282,36 @@ internal static class ConventionModelCollector
                || type.Interfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, interfaceSymbol));
     }
 
+    private static bool InheritsFrom(INamedTypeSymbol type, INamedTypeSymbol baseType)
+    {
+        for (var current = type.BaseType; current != null; current = current.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, baseType))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool HasAttribute(INamedTypeSymbol type, INamedTypeSymbol attributeType)
     {
         return type.GetAttributes().Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, attributeType));
+    }
+
+    private static bool IsAsyncReturnType(string returnType)
+    {
+        var normalized = NormalizeTypeName(returnType);
+        return normalized.StartsWith("System.Threading.Tasks.Task")
+               || normalized.StartsWith("System.Threading.Tasks.ValueTask");
+    }
+
+    private static string NormalizeTypeName(string returnType)
+    {
+        return returnType.StartsWith("global::")
+            ? returnType.Substring("global::".Length)
+            : returnType;
     }
 }
 

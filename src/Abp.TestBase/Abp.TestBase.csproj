@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <Import Project="..\..\common.props" />
   <Import Project="..\..\configureawait.props" />
@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Abp\Abp.csproj" />
+    <ProjectReference Include="..\Abp.Interception.Castle\Abp.Interception.Castle.csproj" />
   </ItemGroup>
 
 </Project>

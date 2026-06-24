@@ -15,7 +15,6 @@ public class Startup
 
         return services.AddAbp<NativeAotSampleWebAppModule>(options =>
         {
-            options.InterceptorOptions.UseCompileTimeInterception = true;
             CompileTimeInterceptionConfiguration.Enable();
         });
     }
@@ -28,6 +27,7 @@ public class Startup
         app.UseEndpoints(endpoints =>
         {
             endpoints.MapGet("/api/hello", (IHelloAppService helloAppService) => helloAppService.SayHello());
+            endpoints.MapGet("/api/hello-value-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloValueTaskAsync());
         });
     }
 }

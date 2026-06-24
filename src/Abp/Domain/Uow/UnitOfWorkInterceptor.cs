@@ -1,7 +1,5 @@
-using System.Reflection;
 using System.Threading.Tasks;
 using Abp.Dependency;
-using Castle.DynamicProxy;
 
 namespace Abp.Domain.Uow
 {
@@ -19,7 +17,7 @@ namespace Abp.Domain.Uow
             _unitOfWorkOptions = unitOfWorkOptions;
         }
 
-        public override void InterceptSynchronous(IInvocation invocation)
+        public override void InterceptSynchronous(IAbpInvocation invocation)
         {
             var method = GetMethodInfo(invocation);
             var unitOfWorkAttr = _unitOfWorkOptions.GetUnitOfWorkAttributeOrNull(method);
@@ -37,7 +35,7 @@ namespace Abp.Domain.Uow
             }
         }
 
-        protected override async Task InternalInterceptAsynchronous(IInvocation invocation)
+        protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
             var method = GetMethodInfo(invocation);
@@ -61,7 +59,7 @@ namespace Abp.Domain.Uow
         }
 
 
-        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IInvocation invocation)
+        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
             var method = GetMethodInfo(invocation);
@@ -87,16 +85,16 @@ namespace Abp.Domain.Uow
             }
         }
 
-        private static MethodInfo GetMethodInfo(IInvocation invocation)
+        private static AbpMethodInfo GetMethodInfo(IAbpInvocation invocation)
         {
-            MethodInfo method;
+            AbpMethodInfo method;
             try
             {
                 method = invocation.MethodInvocationTarget;
             }
             catch
             {
-                method = invocation.GetConcreteMethod();
+                method = ReflectionAbpMethodInfo.From(invocation.GetConcreteMethod());
             }
 
             return method;

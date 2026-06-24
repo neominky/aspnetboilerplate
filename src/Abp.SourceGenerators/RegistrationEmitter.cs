@@ -1,14 +1,17 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Linq;
 using System.Text;
 
 namespace Abp.SourceGenerators;
 
 internal static class RegistrationEmitter
 {
-    public static string? EmitModulePartial(ModuleModel module, ImmutableArray<ConventionTypeModel> models, string? assemblyName)
+    public static string? EmitModulePartial(
+        ModuleModel module,
+        ImmutableArray<ConventionTypeModel> models,
+        string? assemblyName,
+        ImmutableArray<BakedInterceptorField> userInterceptors)
     {
         var generatedNs = GeneratedNamespace.Get(assemblyName);
         var ns = string.IsNullOrEmpty(module.Namespace) ? null : module.Namespace;
@@ -73,6 +76,15 @@ internal static class RegistrationEmitter
             builder.AppendLine($"            global::Castle.MicroKernel.Registration.Component.For(new global::System.Type[] {{ {serviceTypes} }})");
             builder.AppendLine($"                .ImplementedBy(typeof({implementationType}))");
             builder.AppendLine($"                .{lifestyleMethod}());");
+        }
+
+        foreach (var interceptor in userInterceptors)
+        {
+            if (interceptor.TypeName != null)
+            {
+                builder.AppendLine(
+                    $"        iocManager.Register<{interceptor.TypeName}>(global::Abp.Dependency.DependencyLifeStyle.Transient);");
+            }
         }
 
         builder.AppendLine("    }");

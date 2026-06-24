@@ -1,7 +1,6 @@
-﻿using System.Threading.Tasks;
+using System.Threading.Tasks;
 using Abp.Aspects;
 using Abp.Dependency;
-using Castle.DynamicProxy;
 
 namespace Abp.Runtime.Validation.Interception
 {
@@ -17,7 +16,7 @@ namespace Abp.Runtime.Validation.Interception
             _iocResolver = iocResolver;
         }
 
-        public override void InterceptSynchronous(IInvocation invocation)
+        public override void InterceptSynchronous(IAbpInvocation invocation)
         {
             if (AbpCrossCuttingConcerns.IsApplied(invocation.InvocationTarget, AbpCrossCuttingConcerns.Validation))
             {
@@ -25,7 +24,7 @@ namespace Abp.Runtime.Validation.Interception
                 return;
             }
 
-            using (var validator = _iocResolver.ResolveAsDisposable<MethodInvocationValidator>())
+            using (var validator = _iocResolver.ResolveAsDisposable<IMethodInvocationValidator>())
             {
                 validator.Object.Initialize(invocation.MethodInvocationTarget, invocation.Arguments);
                 validator.Object.Validate();
@@ -35,7 +34,7 @@ namespace Abp.Runtime.Validation.Interception
         }
 
 
-        protected override async Task InternalInterceptAsynchronous(IInvocation invocation)
+        protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
 
@@ -46,7 +45,7 @@ namespace Abp.Runtime.Validation.Interception
                 return;
             }
 
-            using (var validator = _iocResolver.ResolveAsDisposable<MethodInvocationValidator>())
+            using (var validator = _iocResolver.ResolveAsDisposable<IMethodInvocationValidator>())
             {
                 validator.Object.Initialize(invocation.MethodInvocationTarget, invocation.Arguments);
                 validator.Object.Validate();
@@ -56,7 +55,7 @@ namespace Abp.Runtime.Validation.Interception
             await ((Task)invocation.ReturnValue);
         }
 
-        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IInvocation invocation)
+        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
 
@@ -66,7 +65,7 @@ namespace Abp.Runtime.Validation.Interception
                 return await ((Task<TResult>)invocation.ReturnValue);
             }
 
-            using (var validator = _iocResolver.ResolveAsDisposable<MethodInvocationValidator>())
+            using (var validator = _iocResolver.ResolveAsDisposable<IMethodInvocationValidator>())
             {
                 validator.Object.Initialize(invocation.MethodInvocationTarget, invocation.Arguments);
                 validator.Object.Validate();

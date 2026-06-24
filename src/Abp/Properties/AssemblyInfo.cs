@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -44,6 +44,8 @@ using Abp;
 [assembly: InternalsVisibleTo("Abp.Zero.EntityFramework")]
 [assembly: InternalsVisibleTo("Abp.ZeroCore")]
 [assembly: InternalsVisibleTo("Abp.ZeroCore.EntityFrameworkCore")]
+[assembly: InternalsVisibleTo("Abp.Interception.Castle")]
+[assembly: InternalsVisibleTo("Abp.SourceGenerators.Runtime")]
 
 // Setting ComVisible to false makes the types in this assembly not visible 
 // to COM components.  If you need to access a type in this assembly from 

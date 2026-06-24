@@ -102,11 +102,6 @@ namespace Abp
         private void AddInterceptorRegistrars(
             AbpBootstrapperInterceptorOptions options)
         {
-            if (options.UseCompileTimeInterception)
-            {
-                return;
-            }
-
             if (!options.DisableValidationInterceptor)
             {
                 ValidationInterceptorRegistrar.Initialize(IocManager);    

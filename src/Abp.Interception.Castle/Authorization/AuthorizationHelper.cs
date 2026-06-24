@@ -1,8 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
-using System.Linq;
 using Abp.Application.Features;
 using Abp.Configuration.Startup;
 using Abp.Dependency;
@@ -12,7 +12,11 @@ using Abp.Runtime.Session;
 
 namespace Abp.Authorization
 {
-    public class AuthorizationHelper : IAuthorizationHelper, ITransientDependency
+    /// <summary>
+    /// Reflection-based <see cref="IAuthorizationHelper"/> for Castle DynamicProxy.
+    /// Moved from <c>src/Abp/Authorization/AuthorizationHelper.cs</c>.
+    /// </summary>
+    public class AuthorizationHelper : IAuthorizationHelper
     {
         public IAbpSession AbpSession { get; set; }
         public IPermissionChecker PermissionChecker { get; set; }
@@ -80,6 +84,24 @@ namespace Abp.Authorization
         {
             CheckFeatures(methodInfo, type);
             CheckPermissions(methodInfo, type);
+        }
+
+        public virtual void Authorize(AbpMethodInfo method, Type type)
+        {
+            if (method.ReflectionMethod != null)
+            {
+                Authorize(method.ReflectionMethod, type);
+            }
+        }
+
+        public virtual Task AuthorizeAsync(AbpMethodInfo method, Type type)
+        {
+            if (method.ReflectionMethod != null)
+            {
+                return AuthorizeAsync(method.ReflectionMethod, type);
+            }
+
+            return Task.CompletedTask;
         }
 
         protected virtual async Task CheckFeaturesAsync(MethodInfo methodInfo, Type type)

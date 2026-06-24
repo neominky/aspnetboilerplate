@@ -1,4 +1,5 @@
-﻿using Abp.Configuration.Startup;
+using Abp.Interception.Castle;
+using Abp.Configuration.Startup;
 using Abp.Localization.Dictionaries;
 using Abp.Localization.Dictionaries.Xml;
 using Abp.Modules;
@@ -15,7 +16,7 @@ namespace Abp.Web
     /// <summary>
     /// This module is used to use ABP in ASP.NET web applications.
     /// </summary>
-    [DependsOn(typeof(AbpKernelModule))]    
+    [DependsOn(typeof(AbpKernelModule), typeof(AbpCastleInterceptionModule))]
     public class AbpWebCommonModule : AbpModule
     {
         /// <inheritdoc/>

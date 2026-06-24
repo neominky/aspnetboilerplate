@@ -1,3 +1,10 @@
+using System;
+using Abp.Auditing;
+using Abp.Authorization;
+using Abp.Domain.Uow;
+using Abp.EntityHistory;
+using Abp.Runtime.Validation.Interception;
+
 namespace Abp.Dependency.CompileTime
 {
     /// <summary>
@@ -10,12 +17,27 @@ namespace Abp.Dependency.CompileTime
 
         public static void Enable()
         {
+            if (IsEnabled)
+            {
+                return;
+            }
+
             IsEnabled = true;
+            DisableCastleDynamicProxyHandlers();
         }
 
         public static void Disable()
         {
             IsEnabled = false;
+        }
+
+        private static void DisableCastleDynamicProxyHandlers()
+        {
+            ValidationInterceptorRegistrar.InitializeHandler = _ => { };
+            AuditingInterceptorRegistrar.InitializeHandler = _ => { };
+            EntityHistoryInterceptorRegistrar.InitializeHandler = _ => { };
+            UnitOfWorkRegistrar.InitializeHandler = _ => { };
+            AuthorizationInterceptorRegistrar.InitializeHandler = _ => { };
         }
     }
 }

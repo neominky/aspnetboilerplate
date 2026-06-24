@@ -13,9 +13,10 @@ using Abp.Reflection;
 namespace Abp.Runtime.Validation.Interception
 {
     /// <summary>
-    /// This class is used to validate a method call (invocation) for method arguments.
+    /// Reflection-based method argument validator for Castle DynamicProxy.
+    /// Moved from <c>src/Abp/Runtime/Validation/Interception/MethodInvocationValidator.cs</c>.
     /// </summary>
-    public class MethodInvocationValidator : ITransientDependency
+    public class MethodInvocationValidator : IMethodInvocationValidator
     {
         private const int MaxRecursiveParameterValidationDepth = 8;
 
@@ -28,9 +29,6 @@ namespace Abp.Runtime.Validation.Interception
         private readonly IValidationConfiguration _configuration;
         private readonly IIocResolver _iocResolver;
 
-        /// <summary>
-        /// Creates a new <see cref="MethodInvocationValidator"/> instance.
-        /// </summary>
         public MethodInvocationValidator(IValidationConfiguration configuration, IIocResolver iocResolver)
         {
             _configuration = configuration;
@@ -40,8 +38,6 @@ namespace Abp.Runtime.Validation.Interception
             ObjectsToBeNormalized = new List<IShouldNormalize>();
         }
 
-        /// <param name="method">Method to be validated</param>
-        /// <param name="parameterValues">List of arguments those are used to call the <paramref name="method"/>.</param>
         public virtual void Initialize(MethodInfo method, object[] parameterValues)
         {
             Check.NotNull(method, nameof(method));
@@ -52,9 +48,17 @@ namespace Abp.Runtime.Validation.Interception
             Parameters = method.GetParameters();
         }
 
-        /// <summary>
-        /// Validates the method invocation.
-        /// </summary>
+        public virtual void Initialize(AbpMethodInfo method, object[] parameterValues)
+        {
+            Check.NotNull(method, nameof(method));
+            Check.NotNull(parameterValues, nameof(parameterValues));
+
+            if (method.ReflectionMethod != null)
+            {
+                Initialize(method.ReflectionMethod, parameterValues);
+            }
+        }
+
         public void Validate()
         {
             CheckInitialized();
@@ -121,11 +125,6 @@ namespace Abp.Runtime.Validation.Interception
             );
         }
 
-        /// <summary>
-        /// Validates given parameter for given value.
-        /// </summary>
-        /// <param name="parameterInfo">Parameter of the method to validate</param>
-        /// <param name="parameterValue">Value to validate</param>
         protected virtual void ValidateMethodParameter(ParameterInfo parameterInfo, object parameterValue)
         {
             if (parameterValue == null)
@@ -167,12 +166,10 @@ namespace Abp.Runtime.Validation.Interception
 
             SetValidationErrors(validatingObject);
 
-            // Validate items of enumerable
             if (IsEnumerable(validatingObject))
             {
-                foreach (var item in (IEnumerable) validatingObject)
+                foreach (var item in (IEnumerable)validatingObject)
                 {
-                    // Do not recursively validate for primitive objects
                     if (item == null || TypeHelper.IsPrimitiveExtendedIncludingNullable(item.GetType()))
                     {
                         break;
@@ -182,7 +179,6 @@ namespace Abp.Runtime.Validation.Interception
                 }
             }
 
-            // Add list to be normalized later
             if (validatingObject is IShouldNormalize)
             {
                 ObjectsToBeNormalized.Add(validatingObject as IShouldNormalize);
@@ -225,7 +221,6 @@ namespace Abp.Runtime.Validation.Interception
 
         protected virtual bool ShouldMakeDeepValidation(object validatingObject)
         {
-            // Do not recursively validate for enumerable objects
             if (validatingObject is IEnumerable)
             {
                 return false;
@@ -233,7 +228,6 @@ namespace Abp.Runtime.Validation.Interception
 
             var validatingObjectType = validatingObject.GetType();
 
-            // Do not recursively validate for primitive objects
             if (TypeHelper.IsPrimitiveExtendedIncludingNullable(validatingObjectType))
             {
                 return false;

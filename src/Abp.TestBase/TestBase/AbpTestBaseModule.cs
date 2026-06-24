@@ -1,9 +1,10 @@
-﻿using Abp.Modules;
+using Abp.Interception.Castle;
+using Abp.Modules;
 using Abp.Reflection.Extensions;
 
 namespace Abp.TestBase
 {
-    [DependsOn(typeof(AbpKernelModule))]
+    [DependsOn(typeof(AbpKernelModule), typeof(AbpCastleInterceptionModule))]
     public class AbpTestBaseModule : AbpModule
     {
         public override void PreInitialize()

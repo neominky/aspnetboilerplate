@@ -5,4 +5,6 @@ namespace Abp.NativeAot.SampleWebApp.Application;
 public interface IHelloAppService : IApplicationService
 {
     string SayHello();
+
+    System.Threading.Tasks.ValueTask<string> SayHelloValueTaskAsync();
 }

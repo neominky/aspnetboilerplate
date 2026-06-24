@@ -14,7 +14,6 @@ namespace Abp.Dependency.CompileTime
         {
             return AbpBootstrapper.Create<TStartupModule>(options =>
             {
-                options.InterceptorOptions.UseCompileTimeInterception = true;
                 CompileTimeInterceptionConfiguration.Enable();
                 configure?.Invoke(options);
             });

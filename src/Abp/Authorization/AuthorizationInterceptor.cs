@@ -1,6 +1,5 @@
-﻿using System.Threading.Tasks;
+using System.Threading.Tasks;
 using Abp.Dependency;
-using Castle.DynamicProxy;
 
 namespace Abp.Authorization
 {
@@ -16,24 +15,24 @@ namespace Abp.Authorization
             _authorizationHelper = authorizationHelper;
         }
 
-        public override void InterceptSynchronous(IInvocation invocation)
+        public override void InterceptSynchronous(IAbpInvocation invocation)
         {
             _authorizationHelper.Authorize(invocation.MethodInvocationTarget, invocation.TargetType);
             invocation.Proceed();
         }
 
-        protected override async Task InternalInterceptAsynchronous(IInvocation invocation)
+        protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
-            
+
             await _authorizationHelper.AuthorizeAsync(invocation.MethodInvocationTarget, invocation.TargetType);
 
             proceedInfo.Invoke();
             var task = (Task)invocation.ReturnValue;
             await task;
         }
-        
-        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IInvocation invocation)
+
+        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
 

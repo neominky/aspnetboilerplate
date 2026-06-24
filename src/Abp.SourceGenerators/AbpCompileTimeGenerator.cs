@@ -28,9 +28,11 @@ public sealed class AbpCompileTimeGenerator : IIncrementalGenerator
                 return;
             }
 
+            var userInterceptors = UserInterceptorCollector.Collect(compilation);
+
             foreach (var module in modules)
             {
-                var moduleSource = RegistrationEmitter.EmitModulePartial(module, models, compilation.AssemblyName);
+                var moduleSource = RegistrationEmitter.EmitModulePartial(module, models, compilation.AssemblyName, userInterceptors);
                 if (moduleSource != null)
                 {
                     spc.AddSource($"{module.ModuleType.Name}.CompileTime.g.cs", SourceText.From(moduleSource, Encoding.UTF8));

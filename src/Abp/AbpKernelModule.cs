@@ -43,6 +43,8 @@ namespace Abp
     /// </summary>
     public sealed class AbpKernelModule : AbpModule
     {
+        internal static Action<IIocManager>? RegisterInterceptors { get; set; }
+
         public override void PreInitialize()
         {
             IocManager.AddConventionalRegistrar(new BasicConventionalRegistrar());
@@ -77,16 +79,12 @@ namespace Abp
                     InstallInstallers = false
                 });
 
-            RegisterInterceptors();
+            InvokeRegisterInterceptors();
         }
 
-        private void RegisterInterceptors()
+        private void InvokeRegisterInterceptors()
         {
-            IocManager.Register(typeof(AbpAsyncDeterminationInterceptor<UnitOfWorkInterceptor>), DependencyLifeStyle.Transient);
-            IocManager.Register(typeof(AbpAsyncDeterminationInterceptor<AuditingInterceptor>), DependencyLifeStyle.Transient);
-            IocManager.Register(typeof(AbpAsyncDeterminationInterceptor<AuthorizationInterceptor>), DependencyLifeStyle.Transient);
-            IocManager.Register(typeof(AbpAsyncDeterminationInterceptor<ValidationInterceptor>), DependencyLifeStyle.Transient);
-            IocManager.Register(typeof(AbpAsyncDeterminationInterceptor<EntityHistoryInterceptor>), DependencyLifeStyle.Transient);
+            RegisterInterceptors?.Invoke(IocManager);
         }
 
         public override void PostInitialize()

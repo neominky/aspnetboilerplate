@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Reflection;
+using Abp.Dependency;
 
 namespace Abp.Domain.Uow
 {
@@ -31,6 +32,30 @@ namespace Abp.Domain.Uow
         public static bool IsConventionalUowClass(this IUnitOfWorkDefaultOptions unitOfWorkDefaultOptions, Type type)
         {
             return unitOfWorkDefaultOptions.ConventionalUowSelectors.Any(selector => selector(type));
+        }
+        public static UnitOfWorkAttribute GetUnitOfWorkAttributeOrNull(this IUnitOfWorkDefaultOptions unitOfWorkDefaultOptions, AbpMethodInfo method)
+        {
+            if (method is IAbpBuiltInInterceptionMetadata builtIn)
+            {
+                if (builtIn.UnitOfWorkAttribute != null)
+                {
+                    return builtIn.UnitOfWorkAttribute;
+                }
+
+                if (builtIn.ApplyConventionalUnitOfWork)
+                {
+                    return new UnitOfWorkAttribute();
+                }
+
+                return null;
+            }
+
+            if (method.ReflectionMethod != null)
+            {
+                return GetUnitOfWorkAttributeOrNull(unitOfWorkDefaultOptions, method.ReflectionMethod);
+            }
+
+            return null;
         }
     }
 }

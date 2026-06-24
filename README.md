@@ -35,6 +35,205 @@ Remove AutoMapper
             └── NativeAOT · Modernization
 ```
 
+### Compile-Time Interception Migration (Step 1)
+
+This section describes how to move **application service interception** from Castle `DynamicProxy` to the `Abp.SourceGenerators` compile-time path. The Castle and compile-time paths are mutually exclusive for a given application: when compile-time interception is enabled, Castle interceptor registrars are disabled and interception is emitted as C# source.
+
+**Reference sample:** [`test/Abp.NativeAot.SampleWebApp`](test/Abp.NativeAot.SampleWebApp)
+
+#### 1. Add project references
+
+```xml
+<ItemGroup>
+  <ProjectReference Include="path/to/Abp.SourceGenerators.Runtime/Abp.SourceGenerators.Runtime.csproj" />
+  <ProjectReference Include="path/to/Abp.SourceGenerators/Abp.SourceGenerators.csproj"
+                    OutputItemType="Analyzer"
+                    ReferenceOutputAssembly="false" />
+</ItemGroup>
+```
+
+Optional (inspect generated code):
+
+```xml
+<PropertyGroup>
+  <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+  <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+</PropertyGroup>
+```
+
+#### 2. Enable compile-time interception at startup (before module `Initialize`)
+
+Castle proxy registration must be turned off **before** `AbpModule.Initialize()` runs. In ASP.NET Core:
+
+```csharp
+return services.AddAbp<MyModule>(options =>
+{
+    CompileTimeInterceptionConfiguration.Enable();
+});
+```
+
+Or use `AbpBootstrapper.CreateWithCompileTimeInterception<TModule>()`.
+
+`CompileTimeInterceptionConfiguration.Enable()` disables Castle built-in interceptor registrars (validation, auditing, unit of work, authorization, entity history).
+
+#### 3. Use compile-time convention registration in the module
+
+```csharp
+using Abp.Dependency.CompileTime;
+
+public partial class MyModule : AbpModule
+{
+    public override void Initialize()
+    {
+        IocManager.RegisterAssemblyByConvention(typeof(MyModule));
+    }
+}
+```
+
+The source generator emits a `partial` `RegisterAssemblyByConvention` method that registers:
+
+- Application services → `{Service}_Intercepted` decorator types
+- User-defined interceptors (`AbpInterceptorBase` + `ITransientDependency`)
+
+If no generated registrar exists for the module, the call falls back to runtime `RegisterAssemblyByConvention(assembly)`.
+
+#### Migrating from an existing application
+
+Typical ABP apps today use Castle `DynamicProxy` via `Abp.Interception.Castle`: application services are registered by convention, and Windsor attaches `AbpAsyncDeterminationInterceptor<T>` at resolve time. The compile-time path replaces **only** that runtime proxy layer. IoC is still Castle.Windsor until roadmap Step 2.
+
+**Checklist**
+
+| Step | Before (Castle) | After (compile-time) |
+|:-----|:----------------|:---------------------|
+| References | `Abp` / `Abp.AspNetCore` only | Add `Abp.SourceGenerators.Runtime` + `Abp.SourceGenerators` analyzer |
+| Startup | `services.AddAbp<MyModule>()` | Call `CompileTimeInterceptionConfiguration.Enable()` in the `AddAbp` options delegate (before module `Initialize`) |
+| Module class | `public class MyModule` | `public partial class MyModule` |
+| Convention registration | `IocManager.RegisterAssemblyByConvention(typeof(MyModule).Assembly)` | `using Abp.Dependency.CompileTime;` then `IocManager.RegisterAssemblyByConvention(typeof(MyModule))` |
+| App service resolve | Concrete type + Castle proxy | IoC resolves `{Service}_Intercepted` decorator (generated) |
+| Custom interceptors | Often Castle-specific wiring | `AbpInterceptorBase` + `ITransientDependency` in the **same assembly** as application services |
+
+Application service classes (`IApplicationService` implementations) usually need **no attribute or signature changes**. Attributes such as `[AbpAuthorize]`, `[Audited]`, `[UnitOfWork]`, and `[DisableValidation]` are read at compile time and baked into `CompileTimeAbpMethodInfo`.
+
+#### API and interface changes
+
+To support both Castle reflection and compile-time metadata, several core APIs were unified. **Custom interceptors and helpers should use the new abstractions** so they work on the compile-time path.
+
+| Area | Before | After |
+|:-----|:-------|:------|
+| Invocation | `Castle.DynamicProxy.IInvocation` (Castle-only) | `IAbpInvocation` (`Abp.Dependency`) |
+| Method metadata in interceptors | `invocation.Method`, `MethodInfo` | `invocation.MethodInvocationTarget` (`AbpMethodInfo`), or `invocation.GetAbpMethod()` |
+| Method reflection helper | Direct `MethodInfo` usage | `AbpInvocationExtensions.GetMethodInvocationTarget(invocation)` when you need `MethodInfo` on the Castle path |
+| Async proceed | Castle `Proceed()` | `invocation.CaptureProceedInfo().Invoke()` then await `invocation.ReturnValue` as `Task` / `Task<T>` |
+| Interceptor base | `AbpInterceptorBase` | Same type; all overrides use `IAbpInvocation` |
+| Built-in aspect metadata | Read from `MethodInfo` at runtime | Baked into `IAbpBuiltInInterceptionMetadata` on compile-time path (framework helpers) |
+
+**Helper interfaces** — new `AbpMethodInfo` overloads were added; Castle implementations keep the existing `MethodInfo` overloads:
+
+| Interface | New overloads (used on compile-time path) |
+|:----------|:------------------------------------------|
+| `IAuthorizationHelper` | `Authorize(AbpMethodInfo, Type)`, `AuthorizeAsync(AbpMethodInfo, Type)` |
+| `IAuditingHelper` | `ShouldSaveAudit(AbpMethodInfo, ...)`, `CreateAuditInfo(Type, AbpMethodInfo, ...)` |
+| `IMethodInvocationValidator` | `Initialize(AbpMethodInfo, object[])` |
+
+If you have a **custom** `IAuthorizationHelper`, `IAuditingHelper`, or `IMethodInvocationValidator`, implement the `AbpMethodInfo` overloads. On the compile-time path, `Method.ReflectionMethod` is often `null`; use `AbpMethodInfo.GetCustomAttributes<T>()` and, for built-in aspects, `method is IAbpBuiltInInterceptionMetadata builtIn`.
+
+**Convention registration API** — the compile-time extension lives in `Abp.Dependency.CompileTime` and takes the **module type**, not `Assembly`:
+
+```csharp
+// Before
+IocManager.RegisterAssemblyByConvention(typeof(MyModule).Assembly);
+
+// After
+using Abp.Dependency.CompileTime;
+
+public partial class MyModule : AbpModule
+{
+    public override void Initialize()
+    {
+        IocManager.RegisterAssemblyByConvention(typeof(MyModule));
+    }
+}
+```
+
+**Custom interceptors** — migrate from Castle types to `IAbpInvocation`:
+
+```csharp
+// Before (Castle-specific)
+public override void InterceptSynchronous(IInvocation invocation) { ... }
+
+// After
+public override void InterceptSynchronous(IAbpInvocation invocation)
+{
+    var method = invocation.MethodInvocationTarget;
+    var attr = method.GetCustomAttributes<MyAttribute>(inherit: true);
+    invocation.Proceed();
+}
+```
+
+User interceptors are no longer picked up by Windsor interceptor lists. They must inherit `AbpInterceptorBase`, implement `ITransientDependency`, and live in the same project as the application services.
+
+**What you can remove or stop doing**
+
+- Manual `AbpAsyncDeterminationInterceptor<T>` registration for application services.
+- Relying on Castle `IInvocation` in application code.
+- Expecting runtime convention registration to wrap `IApplicationService` types with DynamicProxy when compile-time interception is enabled.
+
+**What stays the same**
+
+- Module structure, `DependsOn`, `PreInitialize` / `PostInitialize`.
+- Application service interfaces and DTOs.
+- Built-in interceptor **classes** (`AuthorizationInterceptor`, `UnitOfWorkInterceptor`, etc.) — still resolved from IoC; only the **wiring** changes.
+- Castle.Windsor as the IoC container (until Step 2).
+
+#### 4. Application services (no code changes required)
+
+`IApplicationService` implementations in the compiling assembly are analyzed at build time. For each service the generator emits:
+
+| Artifact | Role |
+|----------|------|
+| `{Name}_Intercepted` | IoC-registered decorator implementing the service interface |
+| `{Name}_Relay` | Static methods with inlined interceptor chains |
+| `NativeAotSampleWebAppModule.CompileTime.g.cs` | IoC registrations |
+
+Interceptor order in the generated chain:
+
+```
+Validation → Auditing → EntityHistory → UnitOfWork → Authorization → user interceptors → target method
+```
+
+Supported method return types: `void`, sync `T`, `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`.
+
+#### 5. User-defined interceptors
+
+Implement `AbpInterceptorBase` and `ITransientDependency` in the **same assembly** as the application services:
+
+```csharp
+public sealed class MyInterceptor : AbpInterceptorBase, ITransientDependency
+{
+    public override void InterceptSynchronous(IAbpInvocation invocation) { /* ... */ }
+    protected override Task InternalInterceptAsynchronous(IAbpInvocation invocation) { /* ... */ }
+    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation) { /* ... */ }
+}
+```
+
+The generator discovers the type at compile time, registers it in IoC, and bakes it into the interceptor chain. No runtime assembly scanning is used.
+
+#### 6. NativeAOT publishing (optional)
+
+For full AOT publish, see the sample project:
+
+- `<PublishAot>true</PublishAot>`
+- `ILLink.Descriptors.xml` for trimmer roots
+- Exclude generated files from compilation if emitted to `obj/Generated`
+
+#### 7. What stays on the Castle path (for now)
+
+`Abp.Web.Common` still references `Abp.Interception.Castle` for the default (non–compile-time) stack. Compile-time interception replaces **runtime DynamicProxy for application services** only when explicitly enabled. IoC remains Castle.Windsor until Step 2 of the roadmap.
+
+#### 8. Verify
+
+Run [`test/Abp.SourceGenerators.Tests`](test/Abp.SourceGenerators.Tests) or hit the sample endpoints after migration. Generated interception code lives under `obj/Generated/Abp.SourceGenerators/` when `EmitCompilerGeneratedFiles` is enabled.
+
 ### 한국어
 
 이 저장소는 [ASP.NET Boilerplate](https://github.com/aspnetboilerplate/aspnetboilerplate)의 포크이며, 원본 프로젝트의 방향과는 별도의 목표를 가지고 유지·발전시킵니다.
@@ -64,6 +263,201 @@ AutoMapper 제거
     └── 3단계: AutoMapper → Source Generator
             └── NativeAOT · 최신화
 ```
+
+**컴파일 타임 인터셉션 마이그레이션 (1단계)**
+
+애플리케이션 서비스 인터셉션을 Castle `DynamicProxy`에서 `Abp.SourceGenerators` 기반 compile-time 경로로 옮기는 방법입니다. Castle 경로와 compile-time 경로는 **동시에 사용하지 않습니다**. compile-time 인터셉션을 켜면 Castle 인터셉터 등록기는 비활성화되고, 인터셉션 로직은 C# 소스로 생성됩니다.
+
+**참고 샘플:** [`test/Abp.NativeAot.SampleWebApp`](test/Abp.NativeAot.SampleWebApp)
+
+**1. 프로젝트 참조 추가**
+
+```xml
+<ItemGroup>
+  <ProjectReference Include="path/to/Abp.SourceGenerators.Runtime/Abp.SourceGenerators.Runtime.csproj" />
+  <ProjectReference Include="path/to/Abp.SourceGenerators/Abp.SourceGenerators.csproj"
+                    OutputItemType="Analyzer"
+                    ReferenceOutputAssembly="false" />
+</ItemGroup>
+```
+
+생성 코드 확인(선택):
+
+```xml
+<PropertyGroup>
+  <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+  <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+</PropertyGroup>
+```
+
+**2. 시작 시 compile-time 인터셉션 활성화 (`Initialize` 이전)**
+
+Castle 프록시 등록은 `AbpModule.Initialize()` **보다 먼저** 꺼야 합니다.
+
+```csharp
+return services.AddAbp<MyModule>(options =>
+{
+    CompileTimeInterceptionConfiguration.Enable();
+});
+```
+
+또는 `AbpBootstrapper.CreateWithCompileTimeInterception<TModule>()`를 사용합니다.
+
+`CompileTimeInterceptionConfiguration.Enable()`은 validation, auditing, unit of work, authorization, entity history용 Castle 등록기를 비활성화합니다.
+
+**3. 모듈에서 compile-time convention 등록 사용**
+
+```csharp
+using Abp.Dependency.CompileTime;
+
+public partial class MyModule : AbpModule
+{
+    public override void Initialize()
+    {
+        IocManager.RegisterAssemblyByConvention(typeof(MyModule));
+    }
+}
+```
+
+소스 생성기가 `partial` `RegisterAssemblyByConvention`을 생성하여 다음을 등록합니다.
+
+- 애플리케이션 서비스 → `{Service}_Intercepted` 데코레이터
+- 사용자 인터셉터 (`AbpInterceptorBase` + `ITransientDependency`)
+
+생성된 등록기가 없으면 런타임 `RegisterAssemblyByConvention(assembly)`로 폴백합니다.
+
+**기존 애플리케이션에서 마이그레이션**
+
+일반적인 ABP 앱은 `Abp.Interception.Castle`을 통해 Castle `DynamicProxy`를 사용합니다. convention 등록으로 애플리케이션 서비스가 등록되고, Windsor이 resolve 시점에 `AbpAsyncDeterminationInterceptor<T>`를 붙입니다. compile-time 경로는 **런타임 프록시 레이어만** 대체합니다. IoC는 로드맵 2단계까지 Castle.Windsor를 유지합니다.
+
+**체크리스트**
+
+| 단계 | 이전 (Castle) | 이후 (compile-time) |
+|:-----|:--------------|:--------------------|
+| 참조 | `Abp` / `Abp.AspNetCore`만 | `Abp.SourceGenerators.Runtime` + `Abp.SourceGenerators` analyzer 추가 |
+| 시작 | `services.AddAbp<MyModule>()` | `AddAbp` 옵션에서 `CompileTimeInterceptionConfiguration.Enable()` 호출 (`Initialize` 이전) |
+| 모듈 클래스 | `public class MyModule` | `public partial class MyModule` |
+| Convention 등록 | `IocManager.RegisterAssemblyByConvention(typeof(MyModule).Assembly)` | `using Abp.Dependency.CompileTime;` 후 `IocManager.RegisterAssemblyByConvention(typeof(MyModule))` |
+| 앱 서비스 resolve | 구현 타입 + Castle 프록시 | IoC가 생성된 `{Service}_Intercepted` 데코레이터 resolve |
+| 사용자 인터셉터 | Castle 전용 wiring | 애플리케이션 서비스와 **같은 어셈블리**의 `AbpInterceptorBase` + `ITransientDependency` |
+
+`IApplicationService` 구현 클래스는 대부분 **코드 변경 없이** 동작합니다. `[AbpAuthorize]`, `[Audited]`, `[UnitOfWork]`, `[DisableValidation]` 등은 compile-time에 분석되어 `CompileTimeAbpMethodInfo`에 bake됩니다.
+
+**API 및 인터페이스 변경**
+
+Castle 리플렉션과 compile-time 메타데이터를 함께 지원하기 위해 핵심 API가 통합되었습니다. **사용자 인터셉터·헬퍼는 새 추상화를 사용**해야 compile-time 경로에서도 동작합니다.
+
+| 영역 | 이전 | 이후 |
+|:-----|:-----|:-----|
+| Invocation | `Castle.DynamicProxy.IInvocation` (Castle 전용) | `IAbpInvocation` (`Abp.Dependency`) |
+| 인터셉터의 메서드 메타데이터 | `invocation.Method`, `MethodInfo` | `invocation.MethodInvocationTarget` (`AbpMethodInfo`), 또는 `invocation.GetAbpMethod()` |
+| 리플렉션 헬퍼 | `MethodInfo` 직접 사용 | Castle 경로에서 `MethodInfo`가 필요하면 `AbpInvocationExtensions.GetMethodInvocationTarget(invocation)` |
+| 비동기 proceed | Castle `Proceed()` | `invocation.CaptureProceedInfo().Invoke()` 후 `invocation.ReturnValue`를 `Task` / `Task<T>`로 await |
+| 인터셉터 베이스 | `AbpInterceptorBase` | 동일; 모든 override가 `IAbpInvocation` 사용 |
+| 내장 aspect 메타데이터 | 런타임 `MethodInfo`에서 읽음 | compile-time 경로에서는 `IAbpBuiltInInterceptionMetadata`로 bake (프레임워크 헬퍼 내부) |
+
+**헬퍼 인터페이스** — `AbpMethodInfo` 오버로드가 추가되었습니다. Castle 구현체는 기존 `MethodInfo` 오버로드를 유지합니다.
+
+| 인터페이스 | 추가된 오버로드 (compile-time 경로에서 사용) |
+|:----------|:--------------------------------------------|
+| `IAuthorizationHelper` | `Authorize(AbpMethodInfo, Type)`, `AuthorizeAsync(AbpMethodInfo, Type)` |
+| `IAuditingHelper` | `ShouldSaveAudit(AbpMethodInfo, ...)`, `CreateAuditInfo(Type, AbpMethodInfo, ...)` |
+| `IMethodInvocationValidator` | `Initialize(AbpMethodInfo, object[])` |
+
+**커스텀** `IAuthorizationHelper`, `IAuditingHelper`, `IMethodInvocationValidator`가 있다면 `AbpMethodInfo` 오버로드를 구현하세요. compile-time 경로에서는 `Method.ReflectionMethod`가 `null`인 경우가 많으므로 `AbpMethodInfo.GetCustomAttributes<T>()`를 사용하고, 내장 aspect는 `method is IAbpBuiltInInterceptionMetadata builtIn`으로 확인합니다.
+
+**Convention 등록 API** — compile-time 확장 메서드는 `Abp.Dependency.CompileTime`에 있으며 인자는 `Assembly`가 아니라 **모듈 타입**입니다.
+
+```csharp
+// 이전
+IocManager.RegisterAssemblyByConvention(typeof(MyModule).Assembly);
+
+// 이후
+using Abp.Dependency.CompileTime;
+
+public partial class MyModule : AbpModule
+{
+    public override void Initialize()
+    {
+        IocManager.RegisterAssemblyByConvention(typeof(MyModule));
+    }
+}
+```
+
+**사용자 인터셉터** — Castle 타입에서 `IAbpInvocation`으로 이전합니다.
+
+```csharp
+// 이전 (Castle 전용)
+public override void InterceptSynchronous(IInvocation invocation) { ... }
+
+// 이후
+public override void InterceptSynchronous(IAbpInvocation invocation)
+{
+    var method = invocation.MethodInvocationTarget;
+    var attr = method.GetCustomAttributes<MyAttribute>(inherit: true);
+    invocation.Proceed();
+}
+```
+
+사용자 인터셉터는 Windsor 인터셉터 목록으로 더 이상 등록되지 않습니다. `AbpInterceptorBase`와 `ITransientDependency`를 구현하고, 소스 생성기가 스캔할 수 있도록 애플리케이션 서비스와 같은 프로젝트에 두어야 합니다.
+
+**제거·중단해도 되는 것**
+
+- 애플리케이션 서비스용 `AbpAsyncDeterminationInterceptor<T>` 수동 등록 (compile-time은 생성된 데코레이터 사용).
+- 애플리케이션 코드에서 Castle `IInvocation` 의존.
+- compile-time 인터셉션 활성화 후 `IApplicationService`에 DynamicProxy가 붙을 것이라는 가정.
+
+**변하지 않는 것**
+
+- 모듈 구조, `DependsOn`, `PreInitialize` / `PostInitialize`.
+- 애플리케이션 서비스 인터페이스와 DTO.
+- 내장 인터셉터 **클래스** (`AuthorizationInterceptor`, `UnitOfWorkInterceptor` 등) — IoC에서 여전히 resolve; **연결 방식**만 변경.
+- IoC 컨테이너로서의 Castle.Windsor (2단계까지).
+
+**4. 애플리케이션 서비스**
+
+컴파일 대상 어셈블리의 `IApplicationService` 구현을 빌드 시 분석합니다. 생성물:
+
+| 생성물 | 역할 |
+|--------|------|
+| `{Name}_Intercepted` | 서비스 인터페이스를 구현하는 IoC 데코레이터 |
+| `{Name}_Relay` | 인터셉터 체인이 인라인된 static 메서드 |
+| `{Module}.CompileTime.g.cs` | IoC 등록 코드 |
+
+인터셉터 실행 순서:
+
+```
+Validation → Auditing → EntityHistory → UnitOfWork → Authorization → 사용자 인터셉터 → 대상 메서드
+```
+
+지원 반환 형식: `void`, 동기 `T`, `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`.
+
+**5. 사용자 정의 인터셉터**
+
+`AbpInterceptorBase`와 `ITransientDependency`를 **애플리케이션 서비스와 같은 어셈블리**에 구현합니다.
+
+```csharp
+public sealed class MyInterceptor : AbpInterceptorBase, ITransientDependency
+{
+    public override void InterceptSynchronous(IAbpInvocation invocation) { /* ... */ }
+    protected override Task InternalInterceptAsynchronous(IAbpInvocation invocation) { /* ... */ }
+    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation) { /* ... */ }
+}
+```
+
+생성기가 compile-time에 타입을 찾아 IoC 등록과 인터셉터 체인에 bake합니다. 런타임 어셈블리 스캔은 사용하지 않습니다.
+
+**6. NativeAOT 게시 (선택)**
+
+샘플 프로젝트 참고: `<PublishAot>true</PublishAot>`, `ILLink.Descriptors.xml`, `obj/Generated` 제외 설정.
+
+**7. 아직 Castle에 남는 부분**
+
+`Abp.Web.Common`은 기본(비 compile-time) 스택을 위해 `Abp.Interception.Castle`을 참조합니다. compile-time 인터셉션은 **명시적으로 켠 경우** 애플리케이션 서비스의 DynamicProxy만 대체합니다. IoC는 로드맵 2단계까지 Castle.Windsor를 유지합니다.
+
+**8. 검증**
+
+[`test/Abp.SourceGenerators.Tests`](test/Abp.SourceGenerators.Tests) 실행 또는 샘플 API 호출. `EmitCompilerGeneratedFiles`가 켜져 있으면 생성 코드는 `obj/Generated/Abp.SourceGenerators/`에서 확인할 수 있습니다.
 
 > ### End of Support Announcement
 > Support for ASP.NET Boilerplate will officially end in **May 2026**. However, we will continue to provide support for [ASP.NET Zero](https://aspnetzero.com/?utm_source=referral&utm_medium=github&utm_campaign=github_zerowebsite_redirection) **customers** using ASP.NET Boilerplate. For those looking for an open-source alternative, we recommend migrating to [ABP Framework](https://abp.io/?utm_source=referral&utm_medium=github&utm_campaign=github_abpwebsite_redirection). For the full story, [read the end of life announcement](https://aspnetboilerplate.com/endofsupport?utm_source=referral&utm_medium=github&utm_campaign=github_zboilerplate_announcement_redirection).

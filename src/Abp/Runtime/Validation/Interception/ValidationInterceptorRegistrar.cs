@@ -1,29 +1,15 @@
-﻿using System.Reflection;
+using System;
 using Abp.Dependency;
-using Castle.Core;
 
 namespace Abp.Runtime.Validation.Interception
 {
     internal static class ValidationInterceptorRegistrar
     {
+        internal static Action<IIocManager>? InitializeHandler { get; set; }
+
         public static void Initialize(IIocManager iocManager)
         {
-            iocManager.IocContainer.Kernel.ComponentRegistered += (key, handler) =>
-            {
-                var implementationType = handler.ComponentModel.Implementation.GetTypeInfo();
-            
-                if (!iocManager.IsRegistered<IAbpValidationDefaultOptions>())
-                {
-                    return;
-                }
-                
-                var validationOptions = iocManager.Resolve<IAbpValidationDefaultOptions>();
-
-                if (validationOptions.IsConventionalValidationClass(implementationType.AsType()))
-                {
-                    handler.ComponentModel.Interceptors.Add(new InterceptorReference(typeof(AbpAsyncDeterminationInterceptor<ValidationInterceptor>)));
-                }
-            };
+            InitializeHandler?.Invoke(iocManager);
         }
     }
 }

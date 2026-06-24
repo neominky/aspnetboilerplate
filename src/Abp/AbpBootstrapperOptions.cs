@@ -30,12 +30,6 @@ namespace Abp
 
     public class AbpBootstrapperInterceptorOptions
     {
-        /// <summary>
-        /// When true, Castle DynamicProxy interceptors are not registered.
-        /// Use with compile-time generated interceptors from Abp.SourceGenerators.
-        /// </summary>
-        public bool UseCompileTimeInterception { get; set; }
-
         public bool DisableValidationInterceptor { get; set; }
         
         public bool DisableAuditingInterceptor { get; set; }

@@ -1,5 +1,3 @@
-﻿using Castle.DynamicProxy;
-using System.Linq;
 using System.Threading.Tasks;
 using Abp.Dependency;
 
@@ -7,40 +5,39 @@ namespace Abp.EntityHistory
 {
     internal class EntityHistoryInterceptor : AbpInterceptorBase, ITransientDependency
     {
+        private readonly IEntityHistoryUseCaseDescriptionProvider _useCaseDescriptionProvider;
+
         public IEntityChangeSetReasonProvider ReasonProvider { get; set; }
 
-        public EntityHistoryInterceptor()
+        public EntityHistoryInterceptor(IEntityHistoryUseCaseDescriptionProvider useCaseDescriptionProvider)
         {
+            _useCaseDescriptionProvider = useCaseDescriptionProvider;
             ReasonProvider = NullEntityChangeSetReasonProvider.Instance;
         }
 
-        public override void InterceptSynchronous(IInvocation invocation)
+        public override void InterceptSynchronous(IAbpInvocation invocation)
         {
-            var methodInfo = invocation.MethodInvocationTarget;
-            var useCaseAttribute = methodInfo.GetCustomAttributes(true).OfType<UseCaseAttribute>().FirstOrDefault()
-                                   ?? methodInfo.DeclaringType.GetCustomAttributes(true).OfType<UseCaseAttribute>().FirstOrDefault();
+            var useCaseDescription = _useCaseDescriptionProvider.GetUseCaseDescription(invocation);
 
-            if (useCaseAttribute?.Description == null)
+            if (useCaseDescription == null)
             {
                 invocation.Proceed();
                 return;
             }
 
-            using (ReasonProvider.Use(useCaseAttribute.Description))
+            using (ReasonProvider.Use(useCaseDescription))
             {
                 invocation.Proceed();
             }
         }
 
-        protected override async Task InternalInterceptAsynchronous(IInvocation invocation)
+        protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
 
-            var methodInfo = invocation.MethodInvocationTarget;
-            var useCaseAttribute = methodInfo.GetCustomAttributes(true).OfType<UseCaseAttribute>().FirstOrDefault()
-                                   ?? methodInfo.DeclaringType.GetCustomAttributes(true).OfType<UseCaseAttribute>().FirstOrDefault();
+            var useCaseDescription = _useCaseDescriptionProvider.GetUseCaseDescription(invocation);
 
-            if (useCaseAttribute?.Description == null)
+            if (useCaseDescription == null)
             {
                 proceedInfo.Invoke();
                 var task = (Task)invocation.ReturnValue;
@@ -48,7 +45,7 @@ namespace Abp.EntityHistory
                 return;
             }
 
-            using (ReasonProvider.Use(useCaseAttribute.Description))
+            using (ReasonProvider.Use(useCaseDescription))
             {
                 proceedInfo.Invoke();
                 var task = (Task)invocation.ReturnValue;
@@ -56,22 +53,20 @@ namespace Abp.EntityHistory
             }
         }
 
-        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IInvocation invocation)
+        protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
 
-            var methodInfo = invocation.MethodInvocationTarget;
-            var useCaseAttribute = methodInfo.GetCustomAttributes(true).OfType<UseCaseAttribute>().FirstOrDefault()
-                                   ?? methodInfo.DeclaringType.GetCustomAttributes(true).OfType<UseCaseAttribute>().FirstOrDefault();
+            var useCaseDescription = _useCaseDescriptionProvider.GetUseCaseDescription(invocation);
 
-            if (useCaseAttribute?.Description == null)
+            if (useCaseDescription == null)
             {
                 proceedInfo.Invoke();
                 var taskResult = (Task<TResult>)invocation.ReturnValue;
                 return await taskResult;
             }
 
-            using (ReasonProvider.Use(useCaseAttribute.Description))
+            using (ReasonProvider.Use(useCaseDescription))
             {
                 proceedInfo.Invoke();
                 var taskResult = (Task<TResult>)invocation.ReturnValue;

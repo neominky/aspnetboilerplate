@@ -1,24 +1,23 @@
-﻿using Castle.DynamicProxy;
 using System.Threading.Tasks;
 
 namespace Abp.Dependency
 {
-    public abstract class AbpInterceptorBase : IAsyncInterceptor
+    public abstract class AbpInterceptorBase
     {
-        public virtual void InterceptAsynchronous(IInvocation invocation)
+        public virtual void InterceptAsynchronous(IAbpInvocation invocation)
         {
             invocation.ReturnValue = InternalInterceptAsynchronous(invocation);
         }
 
-        public virtual void InterceptAsynchronous<TResult>(IInvocation invocation)
+        public virtual void InterceptAsynchronous<TResult>(IAbpInvocation invocation)
         {
             invocation.ReturnValue = InternalInterceptAsynchronous<TResult>(invocation);
         }
 
-        public abstract void InterceptSynchronous(IInvocation invocation);
+        public abstract void InterceptSynchronous(IAbpInvocation invocation);
 
-        protected abstract Task InternalInterceptAsynchronous(IInvocation invocation);
+        protected abstract Task InternalInterceptAsynchronous(IAbpInvocation invocation);
 
-        protected abstract Task<TResult> InternalInterceptAsynchronous<TResult>(IInvocation invocation);
+        protected abstract Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation);
     }
 }

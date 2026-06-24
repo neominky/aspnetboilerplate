@@ -1,8 +1,11 @@
-﻿using Castle.DynamicProxy;
+using Castle.DynamicProxy;
 using System;
 
 namespace Abp.Reflection
 {
+    /// <summary>
+    /// General Castle DynamicProxy utilities (repositories, events). Not moved with interception package.
+    /// </summary>
     public static class ProxyHelper
     {
         /// <summary>

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
 		<TargetFrameworks>net9.0</TargetFrameworks>
 		<AssemblyName>Abp.Tests</AssemblyName>
@@ -26,6 +26,7 @@
 	</ItemGroup>
 	<ItemGroup>
 		<ProjectReference Include="..\..\src\Abp\Abp.csproj" />
+		<ProjectReference Include="..\..\src\Abp.Interception.Castle\Abp.Interception.Castle.csproj" />
 		<ProjectReference Include="..\..\src\Abp.TestBase\Abp.TestBase.csproj" />
 	</ItemGroup>
 	<ItemGroup>
