@@ -9,6 +9,11 @@ namespace Abp.Domain.Uow
     {
         public static UnitOfWorkAttribute GetUnitOfWorkAttributeOrNull(this IUnitOfWorkDefaultOptions unitOfWorkDefaultOptions, MethodInfo methodInfo)
         {
+            if (TryGetUnitOfWorkAttributeFromBakedMetadata(methodInfo, out var bakedAttribute))
+            {
+                return bakedAttribute;
+            }
+
             var attrs = methodInfo.GetCustomAttributes(true).OfType<UnitOfWorkAttribute>().ToArray();
             if (attrs.Length > 0)
             {
@@ -33,29 +38,29 @@ namespace Abp.Domain.Uow
         {
             return unitOfWorkDefaultOptions.ConventionalUowSelectors.Any(selector => selector(type));
         }
-        public static UnitOfWorkAttribute GetUnitOfWorkAttributeOrNull(this IUnitOfWorkDefaultOptions unitOfWorkDefaultOptions, AbpMethodInfo method)
+
+        private static bool TryGetUnitOfWorkAttributeFromBakedMetadata(MethodInfo methodInfo, out UnitOfWorkAttribute attribute)
         {
-            if (method is IAbpBuiltInInterceptionMetadata builtIn)
+            attribute = null;
+
+            if (!AbpMethodInfo.TryGetMetadata(methodInfo, out var metadata) || metadata == null)
             {
-                if (builtIn.UnitOfWorkAttribute != null)
-                {
-                    return builtIn.UnitOfWorkAttribute;
-                }
-
-                if (builtIn.ApplyConventionalUnitOfWork)
-                {
-                    return new UnitOfWorkAttribute();
-                }
-
-                return null;
+                return false;
             }
 
-            if (method.ReflectionMethod != null)
+            if (metadata.UnitOfWorkAttribute != null)
             {
-                return GetUnitOfWorkAttributeOrNull(unitOfWorkDefaultOptions, method.ReflectionMethod);
+                attribute = metadata.UnitOfWorkAttribute;
+                return true;
             }
 
-            return null;
+            if (metadata.ApplyConventionalUnitOfWork)
+            {
+                attribute = new UnitOfWorkAttribute();
+                return true;
+            }
+
+            return true;
         }
     }
 }

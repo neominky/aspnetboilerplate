@@ -13,12 +13,10 @@ namespace Abp.Dependency
 
         Type TargetType { get; }
 
-        IAbpMethodDescriptor MethodDescriptor { get; }
-
         /// <summary>
-        /// The method being invoked. Replaces <c>MethodInfo</c> on compile-time and reflection paths.
+        /// The method being invoked, optionally wrapped as <see cref="AbpMethodInfo"/> when baked metadata exists.
         /// </summary>
-        AbpMethodInfo MethodInvocationTarget { get; }
+        MethodInfo MethodInvocationTarget { get; }
 
         MethodInfo Method { get; }
 

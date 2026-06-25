@@ -7,16 +7,18 @@ namespace Abp.Dependency.CompileTime
 {
     public sealed class CompileTimeAbpInvocation : IAbpInvocation, ICompileTimeInvocationProceedHost
     {
+        private readonly MethodInfo _method;
         private Func<Task<object?>>? _proceedAsync;
 
         public CompileTimeAbpInvocation(
             object invocationTarget,
-            IAbpMethodDescriptor methodDescriptor,
+            MethodInfo method,
             object?[] arguments)
         {
             InvocationTarget = invocationTarget;
-            TargetType = methodDescriptor.DeclaringType;
-            MethodDescriptor = methodDescriptor;
+            _method = method;
+            MethodInvocationTarget = AbpMethodInfo.GetInvocationMethod(method);
+            TargetType = method.DeclaringType!;
             Arguments = arguments;
         }
 
@@ -24,12 +26,9 @@ namespace Abp.Dependency.CompileTime
 
         public Type TargetType { get; }
 
-        public IAbpMethodDescriptor MethodDescriptor { get; }
+        public MethodInfo MethodInvocationTarget { get; }
 
-        public AbpMethodInfo MethodInvocationTarget => MethodDescriptor.Method;
-
-        public MethodInfo Method => MethodInvocationTarget.ReflectionMethod
-            ?? throw new InvalidOperationException("Reflection MethodInfo is not available. Use MethodInvocationTarget.");
+        public MethodInfo Method => _method;
 
         public object?[] Arguments { get; }
 
@@ -52,7 +51,7 @@ namespace Abp.Dependency.CompileTime
 
         public IAbpProceedInfo CaptureProceedInfo() => new CompileTimeAbpProceedInfo(this);
 
-        public MethodInfo GetConcreteMethod() => Method;
+        public MethodInfo GetConcreteMethod() => _method;
 
         internal async Task ProceedAsync()
         {

@@ -14,7 +14,6 @@ namespace Abp.Dependency.CompileTime
             {
                 if (CompileTimeInterceptionConfiguration.IsEnabled)
                 {
-                    CompileTimeServiceRegistrars.Initialize(iocManager);
                     return;
                 }
 

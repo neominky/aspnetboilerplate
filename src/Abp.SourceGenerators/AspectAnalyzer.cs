@@ -6,23 +6,28 @@ namespace Abp.SourceGenerators;
 
 internal static class AspectAnalyzer
 {
-    public static AspectModel Analyze(INamedTypeSymbol implementationType, IMethodSymbol method, ITypeSymbol applicationServiceSymbol)
+    public static AspectModel Analyze(
+        INamedTypeSymbol implementationType,
+        IMethodSymbol method,
+        ITypeSymbol? applicationServiceSymbol,
+        UserInterceptorRegistry userInterceptorRegistry)
     {
         var unitOfWork = GetUnitOfWorkMetadata(implementationType, method, applicationServiceSymbol);
         var audit = ShouldAudit(implementationType, method, applicationServiceSymbol);
-        var validate = IsApplicationServiceType(implementationType, applicationServiceSymbol)
-                       && !HasAttribute(method, "DisableValidationAttribute")
-                       && !HasAttribute(implementationType, "DisableValidationAttribute");
+        var validate = applicationServiceSymbol != null
+                       && IsApplicationServiceType(implementationType, applicationServiceSymbol)
+                       && !HasAttribute(method, AbpTypeNames.Short.Attributes.DisableValidation)
+                       && !HasAttribute(implementationType, AbpTypeNames.Short.Attributes.DisableValidation);
 
         var authorizeExpression = BuildAuthorizeExpression(implementationType, method);
         var featureExpression = BuildFeatureExpression(implementationType, method);
 
-        return new AspectModel
+        var aspect = new AspectModel
         {
             Audit = audit,
             Validate = validate,
-            AllowAnonymous = HasAttribute(method, "AbpAllowAnonymousAttribute"),
-            HasUseCaseAttribute = HasAttribute(method, "UseCaseAttribute") || HasAttribute(implementationType, "UseCaseAttribute"),
+            AllowAnonymous = HasAttribute(method, AbpTypeNames.Short.Attributes.AbpAllowAnonymous),
+            HasUseCaseAttribute = HasAttribute(method, AbpTypeNames.Short.Attributes.UseCase) || HasAttribute(implementationType, AbpTypeNames.Short.Attributes.UseCase),
             UseCaseDescriptionExpression = BuildUseCaseDescriptionExpression(implementationType, method),
             ApplyConventionalUnitOfWork = unitOfWork.ApplyConventional,
             UnitOfWorkAttributeExpression = unitOfWork.AttributeExpression,
@@ -36,10 +41,67 @@ internal static class AspectAnalyzer
                 authorizeExpression,
                 featureExpression,
                 audit,
-                HasAttribute(method, "AbpAllowAnonymousAttribute"),
-                HasAttribute(method, "UseCaseAttribute") || HasAttribute(implementationType, "UseCaseAttribute"),
+                HasAttribute(method, AbpTypeNames.Short.Attributes.AbpAllowAnonymous),
+                HasAttribute(method, AbpTypeNames.Short.Attributes.UseCase) || HasAttribute(implementationType, AbpTypeNames.Short.Attributes.UseCase),
                 BuildUseCaseDescriptionExpression(implementationType, method))
         };
+
+        aspect.AbpReflection = ShouldUseAbpReflection(
+            implementationType,
+            method,
+            applicationServiceSymbol,
+            aspect,
+            userInterceptorRegistry);
+        aspect.MatchingUserInterceptors = userInterceptorRegistry.GetMatchingInterceptors(implementationType, method);
+        aspect.RequiresCompileTimeInterception = RequiresCompileTimeInterception(
+            implementationType,
+            method,
+            applicationServiceSymbol,
+            aspect,
+            userInterceptorRegistry);
+        return aspect;
+    }
+
+    public static AspectModel Analyze(
+        INamedTypeSymbol implementationType,
+        IMethodSymbol method,
+        ITypeSymbol? applicationServiceSymbol)
+        => Analyze(implementationType, method, applicationServiceSymbol, UserInterceptorRegistry.Empty);
+
+    public static bool MethodHasBuiltInInterceptors(
+        INamedTypeSymbol implementationType,
+        IMethodSymbol method,
+        ITypeSymbol? applicationServiceSymbol)
+    {
+        var aspect = Analyze(implementationType, method, applicationServiceSymbol);
+        return !GetBuiltInInterceptorFields(aspect).IsDefaultOrEmpty;
+    }
+
+    public static bool RequiresCompileTimeInterception(
+        INamedTypeSymbol implementationType,
+        IMethodSymbol method,
+        ITypeSymbol? applicationServiceSymbol,
+        AspectModel aspect,
+        UserInterceptorRegistry userInterceptorRegistry)
+    {
+        if (applicationServiceSymbol != null
+            && IsApplicationServiceType(implementationType, applicationServiceSymbol))
+        {
+            return true;
+        }
+
+        if (FindAttribute(method, AbpTypeNames.Short.Attributes.AbpReflection) != null
+            || FindAttribute(implementationType, AbpTypeNames.Short.Attributes.AbpReflection) != null)
+        {
+            return true;
+        }
+
+        if (userInterceptorRegistry.MethodHasInterceptorBinding(implementationType, method))
+        {
+            return true;
+        }
+
+        return !GetBuiltInInterceptorFields(aspect).IsDefaultOrEmpty;
     }
 
     public static string BuildBakedAttributesExpression(ImmutableArray<string> items)
@@ -60,35 +122,35 @@ internal static class AspectAnalyzer
         {
             fields.Add(new BakedInterceptorField(
                 "_validationInterceptor",
-                "global::Abp.Dependency.CompileTime.CompileTimeBuiltInInterceptorProvider.Validation(iocResolver)"));
+                $"{AbpTypeNames.FullyQualified.CompileTimeBuiltInInterceptorProvider}.Validation(iocResolver)"));
         }
 
         if (aspect.Audit)
         {
             fields.Add(new BakedInterceptorField(
                 "_auditingInterceptor",
-                "global::Abp.Dependency.CompileTime.CompileTimeBuiltInInterceptorProvider.Auditing(iocResolver)"));
+                $"{AbpTypeNames.FullyQualified.CompileTimeBuiltInInterceptorProvider}.Auditing(iocResolver)"));
         }
 
         if (aspect.HasUseCaseAttribute)
         {
             fields.Add(new BakedInterceptorField(
                 "_entityHistoryInterceptor",
-                "global::Abp.Dependency.CompileTime.CompileTimeBuiltInInterceptorProvider.EntityHistory(iocResolver)"));
+                $"{AbpTypeNames.FullyQualified.CompileTimeBuiltInInterceptorProvider}.EntityHistory(iocResolver)"));
         }
 
         if (aspect.UnitOfWorkAttributeExpression != null || aspect.ApplyConventionalUnitOfWork)
         {
             fields.Add(new BakedInterceptorField(
                 "_unitOfWorkInterceptor",
-                "global::Abp.Dependency.CompileTime.CompileTimeBuiltInInterceptorProvider.UnitOfWork(iocResolver)"));
+                $"{AbpTypeNames.FullyQualified.CompileTimeBuiltInInterceptorProvider}.UnitOfWork(iocResolver)"));
         }
 
         if (aspect.AuthorizeAttributesExpression != null || aspect.FeatureAttributesExpression != null)
         {
             fields.Add(new BakedInterceptorField(
                 "_authorizationInterceptor",
-                "global::Abp.Dependency.CompileTime.CompileTimeBuiltInInterceptorProvider.Authorization(iocResolver)"));
+                $"{AbpTypeNames.FullyQualified.CompileTimeBuiltInInterceptorProvider}.Authorization(iocResolver)"));
         }
 
         return fields.ToImmutableArray();
@@ -103,7 +165,7 @@ internal static class AspectAnalyzer
 
         foreach (var method in model.Methods)
         {
-            foreach (var field in GetMethodInterceptorFields(method.Aspect, userInterceptorFields))
+            foreach (var field in GetMethodInterceptorFields(method.Aspect, model.IsApplicationService, userInterceptorFields))
             {
                 if (seen.Add(field.FieldName))
                 {
@@ -117,22 +179,27 @@ internal static class AspectAnalyzer
 
     public static ImmutableArray<BakedInterceptorField> GetMethodInterceptorFields(
         AspectModel aspect,
+        bool isApplicationService,
         ImmutableArray<BakedInterceptorField> userInterceptorFields)
     {
         var builtIn = GetBuiltInInterceptorFields(aspect);
-        if (userInterceptorFields.IsDefaultOrEmpty)
+        var matchingUser = isApplicationService
+            ? userInterceptorFields
+            : aspect.MatchingUserInterceptors;
+
+        if (matchingUser.IsDefaultOrEmpty)
         {
             return builtIn;
         }
 
         if (builtIn.IsDefaultOrEmpty)
         {
-            return userInterceptorFields;
+            return matchingUser;
         }
 
-        var combined = ImmutableArray.CreateBuilder<BakedInterceptorField>(builtIn.Length + userInterceptorFields.Length);
+        var combined = ImmutableArray.CreateBuilder<BakedInterceptorField>(builtIn.Length + matchingUser.Length);
         combined.AddRange(builtIn);
-        combined.AddRange(userInterceptorFields);
+        combined.AddRange(matchingUser);
         return combined.ToImmutable();
     }
 
@@ -162,17 +229,17 @@ internal static class AspectAnalyzer
 
         if (audit)
         {
-            items.Add("new global::Abp.Auditing.AuditedAttribute()");
+            items.Add($"new {AbpTypeNames.FullyQualified.AuditedAttribute}()");
         }
 
         if (allowAnonymous)
         {
-            items.Add("new global::Abp.Authorization.AbpAllowAnonymousAttribute()");
+            items.Add($"new {AbpTypeNames.FullyQualified.AbpAllowAnonymousAttribute}()");
         }
 
         if (hasUseCase && useCaseDescriptionExpression != null)
         {
-            items.Add($"new global::Abp.EntityHistory.UseCaseAttribute({useCaseDescriptionExpression})");
+            items.Add($"new {AbpTypeNames.FullyQualified.UseCaseAttribute}({useCaseDescriptionExpression})");
         }
 
         return items.ToImmutableArray();
@@ -203,20 +270,25 @@ internal static class AspectAnalyzer
         }
     }
 
-    private static bool IsApplicationServiceType(INamedTypeSymbol type, ITypeSymbol applicationServiceSymbol)
+    private static bool IsApplicationServiceType(INamedTypeSymbol type, ITypeSymbol? applicationServiceSymbol)
     {
-        return type.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, applicationServiceSymbol)
-                                           || i.AllInterfaces.Any(ai => SymbolEqualityComparer.Default.Equals(ai, applicationServiceSymbol)));
-    }
-
-    private static bool ShouldAudit(INamedTypeSymbol type, IMethodSymbol method, ITypeSymbol applicationServiceSymbol)
-    {
-        if (HasAttribute(method, "DisableAuditingAttribute"))
+        if (applicationServiceSymbol == null)
         {
             return false;
         }
 
-        if (HasAttribute(method, "AuditedAttribute") || HasAttribute(type, "AuditedAttribute"))
+        return type.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, applicationServiceSymbol)
+                                           || i.AllInterfaces.Any(ai => SymbolEqualityComparer.Default.Equals(ai, applicationServiceSymbol)));
+    }
+
+    private static bool ShouldAudit(INamedTypeSymbol type, IMethodSymbol method, ITypeSymbol? applicationServiceSymbol)
+    {
+        if (HasAttribute(method, AbpTypeNames.Short.Attributes.DisableAuditing))
+        {
+            return false;
+        }
+
+        if (HasAttribute(method, AbpTypeNames.Short.Attributes.Audited) || HasAttribute(type, AbpTypeNames.Short.Attributes.Audited))
         {
             return true;
         }
@@ -227,9 +299,9 @@ internal static class AspectAnalyzer
     private static (bool ApplyConventional, string? AttributeExpression, string? OptionsExpression) GetUnitOfWorkMetadata(
         INamedTypeSymbol type,
         IMethodSymbol method,
-        ITypeSymbol applicationServiceSymbol)
+        ITypeSymbol? applicationServiceSymbol)
     {
-        var attribute = FindAttribute(method, "UnitOfWorkAttribute") ?? FindAttribute(type, "UnitOfWorkAttribute");
+        var attribute = FindAttribute(method, AbpTypeNames.Short.Attributes.UnitOfWork) ?? FindAttribute(type, AbpTypeNames.Short.Attributes.UnitOfWork);
         if (attribute != null)
         {
             if (attribute.NamedArguments.Any(a => a.Key == "IsDisabled" && a.Value.Value is true))
@@ -243,7 +315,7 @@ internal static class AspectAnalyzer
 
         if (IsApplicationServiceType(type, applicationServiceSymbol) || ImplementsRepository(type))
         {
-            return (true, null, "new global::Abp.Domain.Uow.UnitOfWorkOptions()");
+            return (true, null, $"new {AbpTypeNames.FullyQualified.UnitOfWorkOptions}()");
         }
 
         return (false, null, null);
@@ -274,13 +346,13 @@ internal static class AspectAnalyzer
         }
 
         return parts.Count == 0
-            ? "new global::Abp.Domain.Uow.UnitOfWorkAttribute()"
-            : $"new global::Abp.Domain.Uow.UnitOfWorkAttribute {{ {string.Join(", ", parts)} }}";
+            ? $"new {AbpTypeNames.FullyQualified.UnitOfWorkAttribute}()"
+            : $"new {AbpTypeNames.FullyQualified.UnitOfWorkAttribute} {{ {string.Join(", ", parts)} }}";
     }
 
-    private static string? GetUnitOfWorkExpression(INamedTypeSymbol type, IMethodSymbol method, ITypeSymbol applicationServiceSymbol)
+    private static string? GetUnitOfWorkExpression(INamedTypeSymbol type, IMethodSymbol method, ITypeSymbol? applicationServiceSymbol)
     {
-        var attribute = FindAttribute(method, "UnitOfWorkAttribute") ?? FindAttribute(type, "UnitOfWorkAttribute");
+        var attribute = FindAttribute(method, AbpTypeNames.Short.Attributes.UnitOfWork) ?? FindAttribute(type, AbpTypeNames.Short.Attributes.UnitOfWork);
         if (attribute != null)
         {
             return BuildUnitOfWorkOptions(attribute);
@@ -288,7 +360,7 @@ internal static class AspectAnalyzer
 
         if (IsApplicationServiceType(type, applicationServiceSymbol) || ImplementsRepository(type))
         {
-            return "new global::Abp.Domain.Uow.UnitOfWorkOptions()";
+            return $"new {AbpTypeNames.FullyQualified.UnitOfWorkOptions}()";
         }
 
         return null;
@@ -296,7 +368,7 @@ internal static class AspectAnalyzer
 
     private static bool ImplementsRepository(INamedTypeSymbol type)
     {
-        return type.AllInterfaces.Any(i => i.Name == "IRepository");
+        return type.AllInterfaces.Any(i => i.Name == AbpTypeNames.Short.IRepository);
     }
 
     private static string? BuildUnitOfWorkOptions(AttributeData attribute)
@@ -329,13 +401,13 @@ internal static class AspectAnalyzer
         }
 
         return parts.Count == 0
-            ? "new global::Abp.Domain.Uow.UnitOfWorkOptions()"
-            : $"new global::Abp.Domain.Uow.UnitOfWorkOptions {{ {string.Join(", ", parts)} }}";
+            ? $"new {AbpTypeNames.FullyQualified.UnitOfWorkOptions}()"
+            : $"new {AbpTypeNames.FullyQualified.UnitOfWorkOptions} {{ {string.Join(", ", parts)} }}";
     }
 
     private static string? BuildUseCaseDescriptionExpression(INamedTypeSymbol type, IMethodSymbol method)
     {
-        var attribute = FindAttribute(method, "UseCaseAttribute") ?? FindAttribute(type, "UseCaseAttribute");
+        var attribute = FindAttribute(method, AbpTypeNames.Short.Attributes.UseCase) ?? FindAttribute(type, AbpTypeNames.Short.Attributes.UseCase);
         if (attribute == null)
         {
             return null;
@@ -349,7 +421,7 @@ internal static class AspectAnalyzer
     {
         var attributes = method.GetAttributes()
             .Concat(type.GetAttributes())
-            .Where(a => a.AttributeClass?.Name is "AbpAuthorizeAttribute")
+            .Where(a => a.AttributeClass?.Name is AbpTypeNames.Short.Attributes.AbpAuthorize)
             .ToList();
 
         if (attributes.Count == 0)
@@ -363,17 +435,17 @@ internal static class AspectAnalyzer
                 .Select(v => $"\"{v.Value}\"")
                 .ToArray();
             var requireAll = a.NamedArguments.FirstOrDefault(n => n.Key == "RequireAllPermissions").Value.Value is true;
-            return $"new global::Abp.Authorization.AbpAuthorizeAttribute({string.Join(", ", permissions)}) {{ RequireAllPermissions = {requireAll.ToString().ToLowerInvariant()} }}";
+            return $"new {AbpTypeNames.FullyQualified.AbpAuthorizeAttribute}({string.Join(", ", permissions)}) {{ RequireAllPermissions = {requireAll.ToString().ToLowerInvariant()} }}";
         });
 
-        return $"new global::Abp.Authorization.AbpAuthorizeAttribute[] {{ {string.Join(", ", items)} }}";
+        return $"new {AbpTypeNames.FullyQualified.AbpAuthorizeAttribute}[] {{ {string.Join(", ", items)} }}";
     }
 
     private static string? BuildFeatureExpression(INamedTypeSymbol type, IMethodSymbol method)
     {
         var attributes = method.GetAttributes()
             .Concat(type.GetAttributes())
-            .Where(a => a.AttributeClass?.Name is "RequiresFeatureAttribute")
+            .Where(a => a.AttributeClass?.Name is AbpTypeNames.Short.Attributes.RequiresFeature)
             .ToList();
 
         if (attributes.Count == 0)
@@ -387,10 +459,10 @@ internal static class AspectAnalyzer
                 .Select(v => $"\"{v.Value}\"")
                 .ToArray();
             var requireAll = a.NamedArguments.FirstOrDefault(n => n.Key == "RequiresAll").Value.Value is true;
-            return $"new global::Abp.Application.Features.RequiresFeatureAttribute({string.Join(", ", features)}) {{ RequiresAll = {requireAll.ToString().ToLowerInvariant()} }}";
+            return $"new {AbpTypeNames.FullyQualified.RequiresFeatureAttribute}({string.Join(", ", features)}) {{ RequiresAll = {requireAll.ToString().ToLowerInvariant()} }}";
         });
 
-        return $"new global::Abp.Application.Features.RequiresFeatureAttribute[] {{ {string.Join(", ", items)} }}";
+        return $"new {AbpTypeNames.FullyQualified.RequiresFeatureAttribute}[] {{ {string.Join(", ", items)} }}";
     }
 
     private static string BuildAuditParametersExpression(IMethodSymbol method)
@@ -400,7 +472,7 @@ internal static class AspectAnalyzer
             return "null";
         }
 
-        var entries = method.Parameters.Select(p => $"[\"{p.Name}\"] = {p.Name}");
+        var entries = method.Parameters.Select(p => $"[nameof({p.Name})] = {p.Name}");
         return $"new global::System.Collections.Generic.Dictionary<string, object?> {{ {string.Join(", ", entries)} }}";
     }
 
@@ -420,13 +492,48 @@ internal static class AspectAnalyzer
     }
 
     private static AttributeData? FindAttribute(ISymbol symbol, string attributeName)
-    {
-        return symbol.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == attributeName);
-    }
+        => AbpSymbolHelpers.FindAttributeByName(symbol, attributeName);
 
     private static bool HasAttribute(ISymbol symbol, string attributeName)
+        => AbpSymbolHelpers.HasAttributeByName(symbol, attributeName);
+
+    private static bool ShouldUseAbpReflection(
+        INamedTypeSymbol type,
+        IMethodSymbol method,
+        ITypeSymbol? applicationServiceSymbol,
+        AspectModel aspect,
+        UserInterceptorRegistry userInterceptorRegistry)
     {
-        return symbol.GetAttributes().Any(a => a.AttributeClass?.Name == attributeName);
+        var methodAttribute = FindAttribute(method, AbpTypeNames.Short.Attributes.AbpReflection);
+        if (methodAttribute != null)
+        {
+            return GetAbpReflectionIncludeValue(methodAttribute);
+        }
+
+        var typeAttribute = FindAttribute(type, AbpTypeNames.Short.Attributes.AbpReflection);
+        if (typeAttribute != null)
+        {
+            return GetAbpReflectionIncludeValue(typeAttribute);
+        }
+
+        if (applicationServiceSymbol != null
+            && IsApplicationServiceType(type, applicationServiceSymbol))
+        {
+            return true;
+        }
+
+        if (userInterceptorRegistry.MethodHasInterceptorBinding(type, method))
+        {
+            return true;
+        }
+
+        return !GetBuiltInInterceptorFields(aspect).IsDefaultOrEmpty;
+    }
+
+    private static bool GetAbpReflectionIncludeValue(AttributeData attribute)
+    {
+        var include = attribute.NamedArguments.FirstOrDefault(a => a.Key == "Include").Value.Value;
+        return include is not bool value || value;
     }
 
     private static bool TryGetNamedBool(AttributeData attribute, string name, out bool value)

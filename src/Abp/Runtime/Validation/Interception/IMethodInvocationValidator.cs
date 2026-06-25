@@ -8,8 +8,6 @@ namespace Abp.Runtime.Validation.Interception
     {
         void Initialize(MethodInfo method, object[] parameterValues);
 
-        void Initialize(AbpMethodInfo method, object[] parameterValues);
-
         void Validate();
     }
 }

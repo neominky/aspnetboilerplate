@@ -1,75 +1,121 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Globalization;
 using System.Reflection;
-using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 
 namespace Abp.Dependency
 {
     /// <summary>
-    /// Method metadata abstraction similar to <see cref="MethodInfo"/> for compile-time and reflection paths.
+    /// <see cref="MethodInfo"/> that carries baked interception metadata from
+    /// <see cref="AbpMethodInterceptionMetadataProvider"/>.
     /// </summary>
-    public abstract class AbpMethodInfo : IAbpMethodDescriptor
+    public sealed class AbpMethodInfo : MethodInfo
     {
-        public abstract string Name { get; }
+        private readonly MethodInfo _inner;
 
-        public abstract Type DeclaringType { get; }
-
-        public abstract Type ReturnType { get; }
-
-        public abstract bool IsPublic { get; }
-
-        public abstract IReadOnlyList<AbpParameterInfo> Parameters { get; }
-
-        AbpMethodInfo IAbpMethodDescriptor.Method => this;
-
-        MethodInfo? IAbpMethodDescriptor.MethodInfo => ReflectionMethod;
-
-        /// <summary>
-        /// Underlying reflection method when available.
-        /// </summary>
-        public virtual MethodInfo? ReflectionMethod => null;
-
-        public abstract bool IsDefined(Type attributeType, bool inherit);
-
-        public abstract object[] GetCustomAttributes(bool inherit);
-
-        public T[] GetCustomAttributes<T>(bool inherit)
-            where T : Attribute
+        private AbpMethodInfo(MethodInfo inner, AbpMethodInterceptionMetadata metadata)
         {
-            return GetCustomAttributes(inherit).OfType<T>().ToArray();
+            _inner = inner;
+            Metadata = metadata;
         }
 
-        public virtual object? Invoke(object? target, object?[]? arguments)
+        public AbpMethodInterceptionMetadata Metadata { get; }
+
+        public static MethodInfo GetInvocationMethod(MethodInfo method)
         {
-            var invoker = GetSyncInvoker();
-            if (invoker == null)
+            Check.NotNull(method, nameof(method));
+
+            if (method is AbpMethodInfo)
             {
-                throw new NotSupportedException($"Synchronous invoke is not available for method '{Name}'.");
+                return method;
             }
 
-            return invoker(target, arguments);
+            if (AbpMethodInterceptionMetadataProvider.Instance.TryGet(method, out var metadata)
+                && metadata != null)
+            {
+                return new AbpMethodInfo(method, metadata);
+            }
+
+            return method;
         }
 
-        public virtual Task<object?> InvokeAsync(object? target, object?[]? arguments)
+        public static bool TryGetMetadata(MethodInfo method, out AbpMethodInterceptionMetadata? metadata)
         {
-            var asyncInvoker = GetAsyncInvoker();
-            if (asyncInvoker != null)
+            if (method is AbpMethodInfo abpMethodInfo)
             {
-                return asyncInvoker(target, arguments);
+                metadata = abpMethodInfo.Metadata;
+                return metadata != null;
             }
 
-            var syncInvoker = GetSyncInvoker();
-            if (syncInvoker != null)
-            {
-                return Task.FromResult(syncInvoker(target, arguments));
-            }
-
-            throw new NotSupportedException($"Invoke is not available for method '{Name}'.");
+            return AbpMethodInterceptionMetadataProvider.Instance.TryGet(method, out metadata)
+                   && metadata != null;
         }
 
-        protected virtual Func<object?, object?[]?, object?>? GetSyncInvoker() => null;
+        public override MemberTypes MemberType => _inner.MemberType;
 
-        protected virtual Func<object?, object?[]?, Task<object?>>? GetAsyncInvoker() => null;
+        public override string Name => _inner.Name;
+
+        public override Type? DeclaringType => _inner.DeclaringType;
+
+        public override Type? ReflectedType => _inner.ReflectedType;
+
+        public override int MetadataToken => _inner.MetadataToken;
+
+        public override Module Module => _inner.Module;
+
+        public override RuntimeMethodHandle MethodHandle => _inner.MethodHandle;
+
+        public override MethodAttributes Attributes => _inner.Attributes;
+
+        public override CallingConventions CallingConvention => _inner.CallingConvention;
+
+        public override Type ReturnType => _inner.ReturnType;
+
+        public override ICustomAttributeProvider ReturnTypeCustomAttributes => _inner.ReturnTypeCustomAttributes;
+
+        public override ParameterInfo ReturnParameter => _inner.ReturnParameter;
+
+        public override bool IsSecurityCritical => _inner.IsSecurityCritical;
+
+        public override bool IsSecuritySafeCritical => _inner.IsSecuritySafeCritical;
+
+        public override bool IsSecurityTransparent => _inner.IsSecurityTransparent;
+
+        public override bool ContainsGenericParameters => _inner.ContainsGenericParameters;
+
+        public override bool IsGenericMethod => _inner.IsGenericMethod;
+
+        public override bool IsGenericMethodDefinition => _inner.IsGenericMethodDefinition;
+
+        public override MethodInfo GetBaseDefinition() => WrapIfNeeded(_inner.GetBaseDefinition());
+
+        public override Type[] GetGenericArguments() => _inner.GetGenericArguments();
+
+        public override MethodInfo GetGenericMethodDefinition() => WrapIfNeeded(_inner.GetGenericMethodDefinition());
+
+        public override MethodInfo MakeGenericMethod(params Type[] typeArguments)
+            => WrapIfNeeded(_inner.MakeGenericMethod(typeArguments));
+
+        public override ParameterInfo[] GetParameters() => _inner.GetParameters();
+
+        public override MethodImplAttributes GetMethodImplementationFlags() => _inner.GetMethodImplementationFlags();
+
+        public override MethodBody? GetMethodBody() => _inner.GetMethodBody();
+
+        public override object Invoke(object? obj, BindingFlags invokeAttr, Binder? binder, object?[]? parameters, CultureInfo? culture)
+            => _inner.Invoke(obj, invokeAttr, binder, parameters, culture);
+
+        public override object[] GetCustomAttributes(bool inherit) => _inner.GetCustomAttributes(inherit);
+
+        public override object[] GetCustomAttributes(Type attributeType, bool inherit) => _inner.GetCustomAttributes(attributeType, inherit);
+
+        public override IList<CustomAttributeData> GetCustomAttributesData() => _inner.GetCustomAttributesData();
+
+        public override bool IsDefined(Type attributeType, bool inherit) => _inner.IsDefined(attributeType, inherit);
+
+        public override string? ToString() => _inner.ToString();
+
+        private MethodInfo WrapIfNeeded(MethodInfo method) => method == _inner ? this : GetInvocationMethod(method);
     }
 }

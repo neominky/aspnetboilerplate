@@ -15,8 +15,8 @@ internal static class ModuleCollector
 {
     public static ImmutableArray<ModuleModel> Collect(Compilation compilation)
     {
-        var abpModule = compilation.GetTypeByMetadataName("Abp.Modules.AbpModule");
-        if (abpModule == null)
+        var abp = AbpCompilationSymbols.Resolve(compilation);
+        if (abp.AbpModule == null)
         {
             return ImmutableArray<ModuleModel>.Empty;
         }
@@ -30,12 +30,12 @@ internal static class ModuleCollector
                 continue;
             }
 
-            if (!InheritsFrom(symbol, abpModule))
+            if (!InheritsFrom(symbol, abp.AbpModule))
             {
                 continue;
             }
 
-            if (symbol.Name.EndsWith("_CompileTime"))
+            if (symbol.Name.EndsWith(AbpTypeNames.GeneratedTypeSuffixes.CompileTimeModule))
             {
                 continue;
             }

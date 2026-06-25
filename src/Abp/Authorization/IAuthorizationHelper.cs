@@ -15,9 +15,5 @@ namespace Abp.Authorization
         Task AuthorizeAsync(MethodInfo methodInfo, Type type);
 
         void Authorize(MethodInfo methodInfo, Type type);
-
-        void Authorize(AbpMethodInfo method, Type type);
-
-        Task AuthorizeAsync(AbpMethodInfo method, Type type);
     }
 }

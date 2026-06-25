@@ -13,11 +13,7 @@ using Castle.Core.Logging;
 
 namespace Abp.Auditing
 {
-    /// <summary>
-    /// Compile-time <see cref="IAuditingHelper"/> using <see cref="AbpMethodInfo"/> metadata.
-    /// Moved from <c>src/Abp/Auditing/AuditingHelper.CompileTime.cs</c>.
-    /// </summary>
-    public class CompileTimeAuditingHelper : IAuditingHelper
+    public class AuditingHelper : IAuditingHelper, ITransientDependency
     {
         public ILogger Logger { get; set; }
         public IAbpSession AbpSession { get; set; }
@@ -28,7 +24,7 @@ namespace Abp.Auditing
         private readonly IUnitOfWorkManager _unitOfWorkManager;
         private readonly IAuditSerializer _auditSerializer;
 
-        public CompileTimeAuditingHelper(
+        public AuditingHelper(
             IAuditInfoProvider auditInfoProvider,
             IAuditingConfiguration configuration,
             IUnitOfWorkManager unitOfWorkManager,
@@ -44,24 +40,14 @@ namespace Abp.Auditing
             AuditingStore = SimpleLogAuditingStore.Instance;
         }
 
-        public bool ShouldSaveAudit(AbpMethodInfo method, bool defaultValue = false)
+        public bool ShouldSaveAudit(MethodInfo methodInfo, bool defaultValue = false)
         {
-            if (method is IAbpBuiltInInterceptionMetadata builtIn
-                && builtIn.ShouldAudit is bool shouldAudit)
+            if (AbpMethodInfo.TryGetMetadata(methodInfo, out var metadata)
+                && metadata?.ShouldAudit is bool shouldAudit)
             {
                 return shouldAudit;
             }
 
-            if (method.ReflectionMethod != null)
-            {
-                return ShouldSaveAudit(method.ReflectionMethod, defaultValue);
-            }
-
-            return defaultValue;
-        }
-
-        public bool ShouldSaveAudit(MethodInfo methodInfo, bool defaultValue = false)
-        {
             if (!_configuration.IsEnabled)
             {
                 return false;
@@ -112,16 +98,6 @@ namespace Abp.Auditing
             }
 
             return defaultValue;
-        }
-
-        public AuditInfo CreateAuditInfo(Type type, AbpMethodInfo method, object[] arguments)
-        {
-            if (method.ReflectionMethod != null)
-            {
-                return CreateAuditInfo(type, method.ReflectionMethod, arguments);
-            }
-
-            return CreateAuditInfo(type, method.Name, arguments, method.Parameters);
         }
 
         public AuditInfo CreateAuditInfo(Type type, MethodInfo method, object[] arguments)
@@ -213,57 +189,6 @@ namespace Abp.Auditing
             var dictionary = new Dictionary<string, object>();
 
             for (var i = 0; i < parameters.Length; i++)
-            {
-                dictionary[parameters[i].Name] = arguments[i];
-            }
-
-            return dictionary;
-        }
-
-        private AuditInfo CreateAuditInfo(
-            Type type,
-            string methodName,
-            object[] arguments,
-            IReadOnlyList<AbpParameterInfo> parameters)
-        {
-            return CreateAuditInfo(type, methodName, CreateArgumentsDictionary(parameters, arguments));
-        }
-
-        private AuditInfo CreateAuditInfo(Type type, string methodName, IDictionary<string, object> arguments)
-        {
-            var auditInfo = new AuditInfo
-            {
-                TenantId = AbpSession.TenantId,
-                UserId = AbpSession.UserId,
-                ImpersonatorUserId = AbpSession.ImpersonatorUserId,
-                ImpersonatorTenantId = AbpSession.ImpersonatorTenantId,
-                ServiceName = type != null
-                    ? type.FullName
-                    : "",
-                MethodName = methodName,
-                Parameters = ConvertArgumentsToJson(arguments),
-                ExecutionTime = Clock.Now
-            };
-
-            try
-            {
-                _auditInfoProvider.Fill(auditInfo);
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn(ex.ToString(), ex);
-            }
-
-            return auditInfo;
-        }
-
-        private static Dictionary<string, object> CreateArgumentsDictionary(
-            IReadOnlyList<AbpParameterInfo> parameters,
-            object[] arguments)
-        {
-            var dictionary = new Dictionary<string, object>();
-
-            for (var i = 0; i < parameters.Count && i < arguments.Length; i++)
             {
                 dictionary[parameters[i].Name] = arguments[i];
             }

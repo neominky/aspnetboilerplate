@@ -1,7 +1,9 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Abp.Dependency;
+using Abp.Dependency.CompileTime;
 
 namespace Abp.NativeAot.SampleWebApp.Interceptors;
 
@@ -18,8 +20,9 @@ public sealed class TaggedAttribute : Attribute
 
 /// <summary>
 /// Example user-defined compile-time interceptor using <see cref="AbpInterceptorBase"/>.
-/// Appends <c>[tag:{Tag}]</c> to string results when <see cref="TaggedAttribute"/> is present.
+/// Triggered by <see cref="TaggedAttribute"/> on classes or methods.
 /// </summary>
+[AbpInterceptor(typeof(TaggedAttribute))]
 public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransientDependency
 {
     public static int InvocationCount { get; private set; }
@@ -89,14 +92,17 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
 
     private static string? TryGetTag(IAbpInvocation invocation)
     {
-        var taggedAttributes = invocation.MethodInvocationTarget.GetCustomAttributes<TaggedAttribute>(inherit: true);
-        if (taggedAttributes.Length > 0)
+        var taggedAttribute = invocation.MethodInvocationTarget
+            .GetCustomAttributes(typeof(TaggedAttribute), inherit: true)
+            .OfType<TaggedAttribute>()
+            .FirstOrDefault();
+        if (taggedAttribute != null)
         {
-            return taggedAttributes[0].Tag;
+            return taggedAttribute.Tag;
         }
 
         var targetType = invocation.InvocationTarget.GetType();
-        var method = targetType.GetMethod(invocation.MethodDescriptor.Name);
+        var method = targetType.GetMethod(invocation.MethodInvocationTarget.Name);
         return method?.GetCustomAttribute<TaggedAttribute>()?.Tag;
     }
 }

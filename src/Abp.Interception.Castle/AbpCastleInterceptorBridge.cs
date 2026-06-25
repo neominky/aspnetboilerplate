@@ -38,12 +38,12 @@ namespace Abp.Dependency
     internal sealed class CastleAbpInvocation : IAbpInvocation
     {
         private readonly IInvocation _invocation;
-        private readonly ReflectionAbpMethodInfo _method;
+        private readonly MethodInfo _methodInvocationTarget;
 
         public CastleAbpInvocation(IInvocation invocation)
         {
             _invocation = invocation;
-            _method = ReflectionAbpMethodInfo.From(GetMethodInvocationTarget(invocation));
+            _methodInvocationTarget = AbpMethodInfo.GetInvocationMethod(GetMethodInvocationTarget(invocation));
         }
 
         private static MethodInfo GetMethodInvocationTarget(IInvocation invocation)
@@ -62,9 +62,7 @@ namespace Abp.Dependency
 
         public Type TargetType => _invocation.TargetType;
 
-        public IAbpMethodDescriptor MethodDescriptor => _method;
-
-        public AbpMethodInfo MethodInvocationTarget => _method;
+        public MethodInfo MethodInvocationTarget => _methodInvocationTarget;
 
         public MethodInfo Method => _invocation.Method;
 

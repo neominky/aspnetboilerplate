@@ -9,16 +9,10 @@ namespace Abp.Dependency
     {
         public static MethodInfo GetMethodInvocationTarget(this IAbpInvocation invocation)
         {
-            var reflectionMethod = invocation.MethodInvocationTarget.ReflectionMethod;
-            if (reflectionMethod != null)
-            {
-                return reflectionMethod;
-            }
-
-            return invocation.GetConcreteMethod();
+            return invocation.MethodInvocationTarget;
         }
 
-        public static AbpMethodInfo GetAbpMethod(this IAbpInvocation invocation)
+        public static MethodInfo GetAbpMethod(this IAbpInvocation invocation)
         {
             return invocation.MethodInvocationTarget;
         }

@@ -20,6 +20,8 @@ public sealed class AbpCompileTimeGenerator : IIncrementalGenerator
                 return;
             }
 
+            var userInterceptorRegistry = UserInterceptorRegistry.Collect(compilation, spc.ReportDiagnostic);
+
             var models = ConventionModelCollector.Collect(compilation);
             var modules = ModuleCollector.Collect(compilation);
 
@@ -28,7 +30,7 @@ public sealed class AbpCompileTimeGenerator : IIncrementalGenerator
                 return;
             }
 
-            var userInterceptors = UserInterceptorCollector.Collect(compilation);
+            var userInterceptors = userInterceptorRegistry.AllInterceptors;
 
             foreach (var module in modules)
             {
@@ -42,12 +44,12 @@ public sealed class AbpCompileTimeGenerator : IIncrementalGenerator
             var initializerSource = RegistrationEmitter.EmitAssemblyInitializer(modules);
             spc.AddSource("CompileTimeIocAssemblyInitializer.g.cs", SourceText.From(initializerSource, Encoding.UTF8));
 
-            foreach (var appService in models.Where(m => m.IsApplicationService))
+            foreach (var model in models.Where(m => m.RequiresCompileTimeInterception))
             {
-                var interceptorSource = InterceptorEmitter.Emit(compilation, compilation.AssemblyName, appService);
+                var interceptorSource = InterceptorEmitter.Emit(compilation, compilation.AssemblyName, model);
                 if (interceptorSource != null)
                 {
-                    spc.AddSource($"{appService.InterceptedTypeName}.g.cs", SourceText.From(interceptorSource, Encoding.UTF8));
+                    spc.AddSource($"{model.InterceptedTypeName}.g.cs", SourceText.From(interceptorSource, Encoding.UTF8));
                 }
             }
         });
@@ -55,6 +57,6 @@ public sealed class AbpCompileTimeGenerator : IIncrementalGenerator
 
     private static bool ShouldGenerate(Compilation compilation)
     {
-        return compilation.GetTypeByMetadataName("Abp.Dependency.CompileTime.CompileTimeInterceptionConfiguration") != null;
+        return compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.CompileTimeInterceptionConfiguration) != null;
     }
 }

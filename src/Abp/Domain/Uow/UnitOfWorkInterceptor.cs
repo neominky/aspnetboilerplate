@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Threading.Tasks;
 using Abp.Dependency;
 
@@ -85,16 +86,16 @@ namespace Abp.Domain.Uow
             }
         }
 
-        private static AbpMethodInfo GetMethodInfo(IAbpInvocation invocation)
+        private static MethodInfo GetMethodInfo(IAbpInvocation invocation)
         {
-            AbpMethodInfo method;
+            MethodInfo method;
             try
             {
                 method = invocation.MethodInvocationTarget;
             }
             catch
             {
-                method = ReflectionAbpMethodInfo.From(invocation.GetConcreteMethod());
+                method = invocation.GetConcreteMethod();
             }
 
             return method;

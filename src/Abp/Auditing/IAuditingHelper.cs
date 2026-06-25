@@ -10,13 +10,9 @@ namespace Abp.Auditing
     {
         bool ShouldSaveAudit(MethodInfo methodInfo, bool defaultValue = false);
 
-        bool ShouldSaveAudit(AbpMethodInfo methodInfo, bool defaultValue = false);
-
         AuditInfo CreateAuditInfo(Type type, MethodInfo method, object[] arguments);
 
         AuditInfo CreateAuditInfo(Type type, MethodInfo method, IDictionary<string, object> arguments);
-
-        AuditInfo CreateAuditInfo(Type type, AbpMethodInfo method, object[] arguments);
 
         void Save(AuditInfo auditInfo);
 

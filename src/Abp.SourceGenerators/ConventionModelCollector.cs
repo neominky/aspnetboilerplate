@@ -11,24 +11,28 @@ internal sealed class ConventionTypeModel
     public string ImplementationTypeName { get; set; } = "";
     public string Namespace { get; set; } = "";
     public bool IsApplicationService { get; set; }
+    public bool RequiresCompileTimeInterception { get; set; }
     public bool IsSingleton { get; set; }
     public ImmutableArray<string> ServiceInterfaces { get; set; }
     public ImmutableArray<MethodModel> Methods { get; set; }
 
-    public string InterceptedTypeName => $"{ImplementationType.Name}_Intercepted";
+    public string InterceptedTypeName => $"{ImplementationType.Name}{AbpTypeNames.GeneratedTypeSuffixes.Intercepted}";
 
-    public string RelayClassName => $"{ImplementationType.Name}_Relay";
+    public string RelayClassName => $"{ImplementationType.Name}{AbpTypeNames.GeneratedTypeSuffixes.Relay}";
 }
 
 internal sealed class MethodModel
 {
     public string Name { get; set; } = "";
+    public string MethodNameExpression { get; set; } = "";
     public string Signature { get; set; } = "";
     public string ParameterList { get; set; } = "";
     public string ArgumentList { get; set; } = "";
     public string ReturnType { get; set; } = "";
     public bool IsAsync { get; set; }
     public bool Validate { get; set; }
+    public bool AbpReflection { get; set; } = true;
+    public bool RequiresCompileTimeInterception { get; set; }
     public ImmutableArray<ParameterModel> Parameters { get; set; }
     public AspectModel Aspect { get; set; } = new AspectModel();
 }
@@ -47,6 +51,8 @@ internal sealed class AspectModel
 {
     public bool Audit { get; set; }
     public bool Validate { get; set; }
+    public bool AbpReflection { get; set; } = true;
+    public bool RequiresCompileTimeInterception { get; set; }
     public bool AllowAnonymous { get; set; }
     public bool HasUseCaseAttribute { get; set; }
     public string? UseCaseDescriptionExpression { get; set; }
@@ -59,30 +65,22 @@ internal sealed class AspectModel
     public string AppliedAttributeTypesExpression { get; set; } = "global::System.Array.Empty<global::System.Type>()";
     public string BakedAttributesExpression { get; set; } = "global::System.Array.Empty<object>()";
     public ImmutableArray<string> BakedAttributeItems { get; set; }
+    public ImmutableArray<BakedInterceptorField> MatchingUserInterceptors { get; set; }
 }
 
 internal static class ConventionModelCollector
 {
-    private static readonly string[] MarkerInterfaces =
-    {
-        "ITransientDependency",
-        "ISingletonDependency",
-        "IApplicationService"
-    };
-
     public static ImmutableArray<ConventionTypeModel> Collect(Compilation compilation)
     {
         var models = new List<ConventionTypeModel>();
-        var transientSymbol = compilation.GetTypeByMetadataName("Abp.Dependency.ITransientDependency");
-        var singletonSymbol = compilation.GetTypeByMetadataName("Abp.Dependency.ISingletonDependency");
-        var applicationServiceSymbol = compilation.GetTypeByMetadataName("Abp.Application.Services.IApplicationService");
-        var disableSymbol = compilation.GetTypeByMetadataName("Abp.Dependency.CompileTime.DisableConventionalRegistrationAttribute");
-        var interceptorBaseSymbol = compilation.GetTypeByMetadataName("Abp.Dependency.AbpInterceptorBase");
+        var abp = AbpCompilationSymbols.Resolve(compilation);
 
-        if (transientSymbol == null)
+        if (!abp.HasTransientDependency)
         {
             return ImmutableArray<ConventionTypeModel>.Empty;
         }
+
+        var userInterceptorRegistry = UserInterceptorRegistry.Collect(compilation);
 
         foreach (var symbol in compilation.Assembly.GlobalNamespace.GetAllTypes())
         {
@@ -96,39 +94,45 @@ internal static class ConventionModelCollector
                 continue;
             }
 
-            if (symbol.Name.EndsWith("_Intercepted") || symbol.Name.EndsWith("_Relay"))
+            if (symbol.Name.EndsWith(AbpTypeNames.GeneratedTypeSuffixes.Intercepted)
+                || symbol.Name.EndsWith(AbpTypeNames.GeneratedTypeSuffixes.Relay))
             {
                 continue;
             }
 
-            if (disableSymbol != null && HasAttribute(symbol, disableSymbol))
+            if (abp.DisableConventionalRegistration != null && AbpSymbolHelpers.HasAttribute(symbol, abp.DisableConventionalRegistration))
             {
                 continue;
             }
 
-            if (interceptorBaseSymbol != null && InheritsFrom(symbol, interceptorBaseSymbol))
+            if (abp.InterceptorBase != null && InheritsFrom(symbol, abp.InterceptorBase))
             {
                 continue;
             }
 
-            var isTransient = Implements(symbol, transientSymbol);
-            var isSingleton = singletonSymbol != null && Implements(symbol, singletonSymbol);
+            var isTransient = Implements(symbol, abp.TransientDependency!);
+            var isSingleton = abp.SingletonDependency != null && Implements(symbol, abp.SingletonDependency);
 
             if (!isTransient && !isSingleton)
             {
                 continue;
             }
 
-            var appServiceInterface = applicationServiceSymbol == null
+            var appServiceInterface = abp.ApplicationService == null
                 ? null
-                : FindAppServiceInterface(symbol, applicationServiceSymbol);
+                : FindAppServiceInterface(symbol, abp.ApplicationService);
 
             var isApplicationService = appServiceInterface != null;
-            var serviceInterfaces = GetServiceInterfaces(symbol, applicationServiceSymbol);
+            var serviceInterfaces = GetServiceInterfaces(symbol, abp.ApplicationService);
 
             var methods = isApplicationService
-                ? CollectMethods(symbol, appServiceInterface!, applicationServiceSymbol!)
-                : ImmutableArray<MethodModel>.Empty;
+                ? CollectInterfaceMethods(symbol, appServiceInterface!, abp.ApplicationService!, userInterceptorRegistry)
+                : ShouldCollectTypeMethods(symbol, abp.ApplicationService, userInterceptorRegistry)
+                    ? CollectTypeMethods(symbol, abp.ApplicationService, userInterceptorRegistry)
+                    : ImmutableArray<MethodModel>.Empty;
+
+            var requiresCompileTimeInterception = isApplicationService
+                || methods.Any(m => m.RequiresCompileTimeInterception);
 
             models.Add(new ConventionTypeModel
             {
@@ -138,6 +142,7 @@ internal static class ConventionModelCollector
                     ? string.Empty
                     : symbol.ContainingNamespace.ToDisplayString(),
                 IsApplicationService = isApplicationService,
+                RequiresCompileTimeInterception = requiresCompileTimeInterception,
                 IsSingleton = isSingleton,
                 ServiceInterfaces = serviceInterfaces,
                 Methods = methods
@@ -159,7 +164,7 @@ internal static class ConventionModelCollector
 
     private static bool IsMarkerInterface(INamedTypeSymbol iface, ITypeSymbol? applicationServiceSymbol)
     {
-        if (MarkerInterfaces.Contains(iface.Name))
+        if (AbpTypeNames.Short.MarkerInterfaces.Contains(iface.Name))
         {
             return true;
         }
@@ -177,10 +182,11 @@ internal static class ConventionModelCollector
             .FirstOrDefault();
     }
 
-    private static ImmutableArray<MethodModel> CollectMethods(
+    private static ImmutableArray<MethodModel> CollectInterfaceMethods(
         INamedTypeSymbol implementationType,
         INamedTypeSymbol appServiceInterface,
-        ITypeSymbol applicationServiceSymbol)
+        ITypeSymbol applicationServiceSymbol,
+        UserInterceptorRegistry userInterceptorRegistry)
     {
         var methods = new List<MethodModel>();
         var seen = new HashSet<string>();
@@ -213,17 +219,110 @@ internal static class ConventionModelCollector
                     continue;
                 }
 
-                methods.Add(CreateMethodModel(implementationType, implementationMethod, applicationServiceSymbol));
+                methods.Add(CreateMethodModel(implementationType, implementationMethod, applicationServiceSymbol, userInterceptorRegistry));
             }
         }
 
         return methods.ToImmutableArray();
     }
 
+    private static bool ShouldCollectTypeMethods(
+        INamedTypeSymbol type,
+        ITypeSymbol? applicationServiceSymbol,
+        UserInterceptorRegistry userInterceptorRegistry)
+    {
+        if (AbpSymbolHelpers.HasAttributeByName(type, AbpTypeNames.Short.Attributes.AbpReflection))
+        {
+            return true;
+        }
+
+        if (AbpSymbolHelpers.HasAttributeByName(type, AbpTypeNames.Short.Attributes.AbpIntercept))
+        {
+            return true;
+        }
+
+        if (type.GetMembers().OfType<IMethodSymbol>().Any(HasAbpReflectionAttribute))
+        {
+            return true;
+        }
+
+        if (userInterceptorRegistry.TypeHasInterceptorBinding(type))
+        {
+            return true;
+        }
+
+        if (HasInterceptableTypeAttributes(type))
+        {
+            return true;
+        }
+
+        return GetCandidateTypeMethods(type).Any(method =>
+            userInterceptorRegistry.MethodHasInterceptorBinding(type, method)
+            || AspectAnalyzer.MethodHasBuiltInInterceptors(type, method, applicationServiceSymbol));
+    }
+
+    private static ImmutableArray<MethodModel> CollectTypeMethods(
+        INamedTypeSymbol implementationType,
+        ITypeSymbol? applicationServiceSymbol,
+        UserInterceptorRegistry userInterceptorRegistry)
+    {
+        return GetCandidateTypeMethods(implementationType)
+            .Select(method => CreateMethodModel(implementationType, method, applicationServiceSymbol, userInterceptorRegistry))
+            .ToImmutableArray();
+    }
+
+    private static IEnumerable<IMethodSymbol> GetCandidateTypeMethods(INamedTypeSymbol implementationType)
+    {
+        foreach (var member in implementationType.GetMembers().OfType<IMethodSymbol>())
+        {
+            if (member.MethodKind != MethodKind.Ordinary || member.IsStatic || member.IsAbstract)
+            {
+                continue;
+            }
+
+            if (member.DeclaredAccessibility != Accessibility.Public)
+            {
+                continue;
+            }
+
+            if (member.AssociatedSymbol is IPropertySymbol)
+            {
+                continue;
+            }
+
+            if (member.MethodKind == MethodKind.Constructor)
+            {
+                continue;
+            }
+
+            yield return member;
+        }
+    }
+
+    private static bool HasInterceptableTypeAttributes(INamedTypeSymbol type)
+    {
+        return AbpSymbolHelpers.HasAttributeByName(type, AbpTypeNames.Short.Attributes.Audited)
+               || AbpSymbolHelpers.HasAttributeByName(type, AbpTypeNames.Short.Attributes.UnitOfWork)
+               || AbpSymbolHelpers.HasAttributeByName(type, AbpTypeNames.Short.Attributes.AbpAuthorize)
+               || AbpSymbolHelpers.HasAttributeByName(type, AbpTypeNames.Short.Attributes.RequiresFeature)
+               || AbpSymbolHelpers.HasAttributeByName(type, AbpTypeNames.Short.Attributes.UseCase);
+    }
+
+    private static bool HasAbpReflectionAttribute(ISymbol symbol)
+    {
+        return AbpSymbolHelpers.HasAttributeByName(symbol, AbpTypeNames.Short.Attributes.AbpReflection);
+    }
+
+    private static bool HasAttribute(INamedTypeSymbol type, string attributeName)
+    {
+        return AbpSymbolHelpers.HasAttributeByName(type, attributeName);
+    }
+
     private static MethodModel CreateMethodModel(
         INamedTypeSymbol implementationType,
         IMethodSymbol method,
-        ITypeSymbol applicationServiceSymbol)
+        ITypeSymbol? applicationServiceSymbol,
+        UserInterceptorRegistry userInterceptorRegistry)
     {
         var returnType = method.ReturnType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         var parameters = method.Parameters;
@@ -234,17 +333,20 @@ internal static class ConventionModelCollector
             ? $"{method.Name}()"
             : $"{method.Name}({parameterList})";
 
-        var aspect = AspectAnalyzer.Analyze(implementationType, method, applicationServiceSymbol);
+        var aspect = AspectAnalyzer.Analyze(implementationType, method, applicationServiceSymbol, userInterceptorRegistry);
 
         return new MethodModel
         {
             Name = method.Name,
+            MethodNameExpression = BuildMethodNameExpression(implementationType, method),
             Signature = signature,
             ParameterList = parameterList,
             ArgumentList = argumentList,
             ReturnType = returnType,
             IsAsync = IsAsyncReturnType(returnType),
             Validate = aspect.Validate,
+            AbpReflection = aspect.AbpReflection,
+            RequiresCompileTimeInterception = aspect.RequiresCompileTimeInterception,
             Parameters = parameters.Select((p, index) => new ParameterModel
             {
                 Name = p.Name,
@@ -297,7 +399,7 @@ internal static class ConventionModelCollector
 
     private static bool HasAttribute(INamedTypeSymbol type, INamedTypeSymbol attributeType)
     {
-        return type.GetAttributes().Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, attributeType));
+        return AbpSymbolHelpers.HasAttribute(type, attributeType);
     }
 
     private static bool IsAsyncReturnType(string returnType)
@@ -312,6 +414,19 @@ internal static class ConventionModelCollector
         return returnType.StartsWith("global::")
             ? returnType.Substring("global::".Length)
             : returnType;
+    }
+
+    private static string BuildMethodNameExpression(INamedTypeSymbol implementationType, IMethodSymbol method)
+    {
+        if (method.ExplicitInterfaceImplementations.Length > 0)
+        {
+            var explicitMethod = method.ExplicitInterfaceImplementations[0];
+            var interfaceTypeName = explicitMethod.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            return $"nameof({interfaceTypeName}.{explicitMethod.Name})";
+        }
+
+        var typeName = implementationType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        return $"nameof({typeName}.{method.Name})";
     }
 }
 

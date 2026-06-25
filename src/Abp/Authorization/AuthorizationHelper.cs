@@ -12,11 +12,7 @@ using Abp.Runtime.Session;
 
 namespace Abp.Authorization
 {
-    /// <summary>
-    /// Reflection-based <see cref="IAuthorizationHelper"/> for Castle DynamicProxy.
-    /// Moved from <c>src/Abp/Authorization/AuthorizationHelper.cs</c>.
-    /// </summary>
-    public class AuthorizationHelper : IAuthorizationHelper
+    public class AuthorizationHelper : IAuthorizationHelper, ITransientDependency
     {
         public IAbpSession AbpSession { get; set; }
         public IPermissionChecker PermissionChecker { get; set; }
@@ -34,6 +30,28 @@ namespace Abp.Authorization
             LocalizationManager = NullLocalizationManager.Instance;
         }
 
+        public virtual async Task AuthorizeAsync(MethodInfo methodInfo, Type type)
+        {
+            if (TryAuthorizeFromMetadata(methodInfo, async: true))
+            {
+                return;
+            }
+
+            await CheckFeaturesAsync(methodInfo, type);
+            await CheckPermissionsAsync(methodInfo, type);
+        }
+
+        public virtual void Authorize(MethodInfo methodInfo, Type type)
+        {
+            if (TryAuthorizeFromMetadata(methodInfo, async: false))
+            {
+                return;
+            }
+
+            CheckFeatures(methodInfo, type);
+            CheckPermissions(methodInfo, type);
+        }
+
         public virtual async Task AuthorizeAsync(IEnumerable<IAbpAuthorizeAttribute> authorizeAttributes)
         {
             if (!_authConfiguration.IsEnabled)
@@ -44,8 +62,8 @@ namespace Abp.Authorization
             if (!AbpSession.UserId.HasValue)
             {
                 throw new AbpAuthorizationException(
-                    LocalizationManager.GetString(AbpConsts.LocalizationSourceName, "CurrentUserDidNotLoginToTheApplication")
-                    );
+                  LocalizationManager.GetString(AbpConsts.LocalizationSourceName, "CurrentUserDidNotLoginToTheApplication")
+                );
             }
 
             foreach (var authorizeAttribute in authorizeAttributes)
@@ -64,44 +82,14 @@ namespace Abp.Authorization
             if (!AbpSession.UserId.HasValue)
             {
                 throw new AbpAuthorizationException(
-                    LocalizationManager.GetString(AbpConsts.LocalizationSourceName, "CurrentUserDidNotLoginToTheApplication")
-                    );
+                  LocalizationManager.GetString(AbpConsts.LocalizationSourceName, "CurrentUserDidNotLoginToTheApplication")
+                );
             }
 
             foreach (var authorizeAttribute in authorizeAttributes)
             {
                 PermissionChecker.Authorize(authorizeAttribute.RequireAllPermissions, authorizeAttribute.Permissions);
             }
-        }
-
-        public virtual async Task AuthorizeAsync(MethodInfo methodInfo, Type type)
-        {
-            await CheckFeaturesAsync(methodInfo, type);
-            await CheckPermissionsAsync(methodInfo, type);
-        }
-
-        public virtual void Authorize(MethodInfo methodInfo, Type type)
-        {
-            CheckFeatures(methodInfo, type);
-            CheckPermissions(methodInfo, type);
-        }
-
-        public virtual void Authorize(AbpMethodInfo method, Type type)
-        {
-            if (method.ReflectionMethod != null)
-            {
-                Authorize(method.ReflectionMethod, type);
-            }
-        }
-
-        public virtual Task AuthorizeAsync(AbpMethodInfo method, Type type)
-        {
-            if (method.ReflectionMethod != null)
-            {
-                return AuthorizeAsync(method.ReflectionMethod, type);
-            }
-
-            return Task.CompletedTask;
         }
 
         protected virtual async Task CheckFeaturesAsync(MethodInfo methodInfo, Type type)
@@ -157,10 +145,10 @@ namespace Abp.Authorization
             }
 
             var authorizeAttributes =
-                ReflectionHelper
-                    .GetAttributesOfMemberAndType(methodInfo, type)
-                    .OfType<IAbpAuthorizeAttribute>()
-                    .ToArray();
+              ReflectionHelper
+                .GetAttributesOfMemberAndType(methodInfo, type)
+                .OfType<IAbpAuthorizeAttribute>()
+                .ToArray();
 
             if (!authorizeAttributes.Any())
             {
@@ -193,10 +181,10 @@ namespace Abp.Authorization
             }
 
             var authorizeAttributes =
-                ReflectionHelper
-                    .GetAttributesOfMemberAndType(methodInfo, type)
-                    .OfType<IAbpAuthorizeAttribute>()
-                    .ToArray();
+              ReflectionHelper
+                .GetAttributesOfMemberAndType(methodInfo, type)
+                .OfType<IAbpAuthorizeAttribute>()
+                .ToArray();
 
             if (!authorizeAttributes.Any())
             {
@@ -206,12 +194,87 @@ namespace Abp.Authorization
             Authorize(authorizeAttributes);
         }
 
+        private void CheckFeaturesInternal(IReadOnlyList<RequiresFeatureAttribute> featureAttributes)
+        {
+            if (featureAttributes == null || featureAttributes.Count <= 0)
+            {
+                return;
+            }
+
+            foreach (var featureAttribute in featureAttributes)
+            {
+                _featureChecker.CheckEnabled(featureAttribute.RequiresAll, featureAttribute.Features);
+            }
+        }
+
+        private Task CheckFeaturesInternalAsync(IReadOnlyList<RequiresFeatureAttribute> featureAttributes)
+        {
+            if (featureAttributes == null || featureAttributes.Count <= 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            return CheckFeaturesInternalAsyncCore(featureAttributes);
+        }
+
+        private async Task CheckFeaturesInternalAsyncCore(IReadOnlyList<RequiresFeatureAttribute> featureAttributes)
+        {
+            foreach (var featureAttribute in featureAttributes)
+            {
+                await _featureChecker.CheckEnabledAsync(featureAttribute.RequiresAll, featureAttribute.Features);
+            }
+        }
+
+        private bool TryAuthorizeFromMetadata(MethodInfo method, bool async)
+        {
+            if (!AbpMethodInfo.TryGetMetadata(method, out var metadata) || metadata == null)
+            {
+                return false;
+            }
+
+            if (metadata.AuthorizeAttributes == null && metadata.FeatureAttributes == null)
+            {
+                return false;
+            }
+
+            if (metadata.AllowAnonymous)
+            {
+                return true;
+            }
+
+            if (metadata.FeatureAttributes is { Count: > 0 })
+            {
+                if (async)
+                {
+                    CheckFeaturesInternalAsync(metadata.FeatureAttributes).GetAwaiter().GetResult();
+                }
+                else
+                {
+                    CheckFeaturesInternal(metadata.FeatureAttributes);
+                }
+            }
+
+            if (metadata.AuthorizeAttributes is { Count: > 0 })
+            {
+                if (async)
+                {
+                    AuthorizeAsync(metadata.AuthorizeAttributes).GetAwaiter().GetResult();
+                }
+                else
+                {
+                    Authorize(metadata.AuthorizeAttributes);
+                }
+            }
+
+            return true;
+        }
+
         private static bool AllowAnonymous(MemberInfo memberInfo, Type type)
         {
             return ReflectionHelper
-                .GetAttributesOfMemberAndType(memberInfo, type)
-                .OfType<IAbpAllowAnonymousAttribute>()
-                .Any();
+              .GetAttributesOfMemberAndType(memberInfo, type)
+              .OfType<IAbpAllowAnonymousAttribute>()
+              .Any();
         }
     }
 }

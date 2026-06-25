@@ -29,27 +29,27 @@ internal static class RegistrationEmitter
         var shortName = module.ModuleType.Name;
         builder.AppendLine($"public partial class {shortName}");
         builder.AppendLine("{");
-        builder.AppendLine("    public static void RegisterAssemblyByConvention(global::Abp.Dependency.IIocManager iocManager)");
+        builder.AppendLine($"    public static void RegisterAssemblyByConvention({AbpTypeNames.FullyQualified.IIocManager} iocManager)");
         builder.AppendLine("    {");
 
         foreach (var model in models.OrderBy(m => m.ImplementationTypeName))
         {
             var lifestyle = model.IsSingleton
-                ? "global::Abp.Dependency.DependencyLifeStyle.Singleton"
-                : "global::Abp.Dependency.DependencyLifeStyle.Transient";
+                ? AbpTypeNames.FullyQualified.DependencyLifeStyleSingleton
+                : AbpTypeNames.FullyQualified.DependencyLifeStyleTransient;
 
-            var implementationType = model.IsApplicationService
+            var implementationType = model.RequiresCompileTimeInterception
                 ? $"global::{generatedNs}.{model.InterceptedTypeName}"
                 : model.ImplementationTypeName;
 
-            if (model.IsApplicationService)
+            if (model.RequiresCompileTimeInterception)
             {
                 builder.AppendLine($"        iocManager.Register<{model.ImplementationTypeName}>({lifestyle});");
             }
 
             if (model.ServiceInterfaces.IsDefaultOrEmpty)
             {
-                if (!model.IsApplicationService)
+                if (!model.RequiresCompileTimeInterception)
                 {
                     builder.AppendLine($"        iocManager.Register<{model.ImplementationTypeName}>({lifestyle});");
                 }
@@ -57,7 +57,7 @@ internal static class RegistrationEmitter
                 continue;
             }
 
-            var registeredTypes = model.IsApplicationService
+            var registeredTypes = model.RequiresCompileTimeInterception
                 ? model.ServiceInterfaces.Select(i => $"typeof({i})").ToList()
                 : new List<string> { $"typeof({model.ImplementationTypeName})" }
                     .Concat(model.ServiceInterfaces.Select(i => $"typeof({i})"))
@@ -83,7 +83,7 @@ internal static class RegistrationEmitter
             if (interceptor.TypeName != null)
             {
                 builder.AppendLine(
-                    $"        iocManager.Register<{interceptor.TypeName}>(global::Abp.Dependency.DependencyLifeStyle.Transient);");
+                    $"        iocManager.Register<{interceptor.TypeName}>({AbpTypeNames.FullyQualified.DependencyLifeStyleTransient});");
             }
         }
 
@@ -109,7 +109,7 @@ internal static class RegistrationEmitter
 
         foreach (var module in modules)
         {
-            builder.AppendLine("        global::Abp.Dependency.CompileTime.CompileTimeIocRegistrarRegistry.Register(");
+            builder.AppendLine($"        {AbpTypeNames.FullyQualified.CompileTimeIocRegistrarRegistry}.Register(");
             builder.AppendLine($"            typeof({module.ModuleTypeName}),");
             builder.AppendLine($"            {module.ModuleTypeName}.RegisterAssemblyByConvention);");
         }
