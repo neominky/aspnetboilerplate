@@ -1,10 +1,11 @@
 ﻿using System;
+using System.Linq;
+using System.Reflection;
 using Abp.Dependency;
 
 namespace Abp.Auditing
 {
     /// <summary>
-    /// Registration facade for <see cref="AbpBootstrapper"/>.
     /// Castle DynamicProxy implementation moved to <c>src/Abp.Interception.Castle/Auditing/AuditingInterceptorRegistrar.cs</c>.
     /// </summary>
     internal static class AuditingInterceptorRegistrar
