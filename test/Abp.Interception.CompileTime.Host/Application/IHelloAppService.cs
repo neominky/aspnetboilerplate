@@ -1,6 +1,6 @@
 using Abp.Application.Services;
 
-namespace Abp.NativeAot.SampleWebApp.Application;
+namespace Abp.Interception.CompileTime.Host.Application;
 
 public interface IHelloAppService : IApplicationService
 {

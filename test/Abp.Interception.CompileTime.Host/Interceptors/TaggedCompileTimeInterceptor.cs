@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using Abp.Dependency;
 using Abp.Dependency.CompileTime;
 
-namespace Abp.NativeAot.SampleWebApp.Interceptors;
+namespace Abp.Interception.CompileTime.Host.Interceptors;
 
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false)]
 public sealed class TaggedAttribute : Attribute
@@ -18,10 +18,6 @@ public sealed class TaggedAttribute : Attribute
     }
 }
 
-/// <summary>
-/// Example user-defined compile-time interceptor using <see cref="AbpInterceptorBase"/>.
-/// Triggered by <see cref="TaggedAttribute"/> on classes or methods.
-/// </summary>
 [AbpInterceptor(typeof(TaggedAttribute))]
 public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransientDependency
 {

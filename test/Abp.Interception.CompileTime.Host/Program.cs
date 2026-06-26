@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Hosting;
 
-namespace Abp.NativeAot.SampleWebApp;
+namespace Abp.Interception.CompileTime.Host;
 
 public class Program
 {

@@ -7,5 +7,5 @@
   <assembly fullname="Abp" preserve="all" />
   <assembly fullname="Abp.AspNetCore" preserve="all" />
   <assembly fullname="Abp.SourceGenerators.Runtime" preserve="all" />
-  <assembly fullname="Abp.NativeAot.SampleWebApp" preserve="all" />
+  <assembly fullname="Abp.Interception.CompileTime.Host" preserve="all" />
 </linker>

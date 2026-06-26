@@ -39,7 +39,7 @@ Remove AutoMapper
 
 This section describes how to move **service interception** from Castle `DynamicProxy` to the `Abp.SourceGenerators` compile-time path. The Castle and compile-time paths are mutually exclusive for a given application: when compile-time interception is enabled, Castle interceptor registrars are disabled and interception is emitted as C# source.
 
-**Reference sample:** [`test/Abp.NativeAot.SampleWebApp`](test/Abp.NativeAot.SampleWebApp)
+**Reference sample (NativeAOT):** [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host) — compile-time interception host with `<PublishAot>true</PublishAot>`. AOT runtime is not yet fully supported (Castle Windsor); use JIT `dotnet run` for manual checks until roadmap Step 2.
 
 #### 1. Add project references
 
@@ -238,7 +238,7 @@ Supported method return types: `void`, sync `T`, `Task`, `Task<T>`, `ValueTask`,
 
 #### 5. User-defined interceptors
 
-Trigger attribute (recommended; see `test/Abp.NativeAot.SampleWebApp/Interceptors/TaggedCompileTimeInterceptor.cs`):
+Trigger attribute (recommended; see `test/Abp.Interception.CompileTime.Host/Interceptors/TaggedCompileTimeInterceptor.cs`):
 
 ```csharp
 [AbpInterceptor(typeof(TaggedAttribute))]
@@ -274,7 +274,7 @@ For full AOT publish, see the sample project:
 
 #### 8. Verify
 
-Run [`test/Abp.SourceGenerators.Tests`](test/Abp.SourceGenerators.Tests) or exercise [`test/Abp.NativeAot.SampleWebApp`](test/Abp.NativeAot.SampleWebApp). With `EmitCompilerGeneratedFiles`, generated sources appear under `obj/Generated/Abp.SourceGenerators/`.
+Run [`test/Abp.Interception.CompileTime.Tests`](test/Abp.Interception.CompileTime.Tests) against [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host). With `EmitCompilerGeneratedFiles` on the host project, generated sources appear under `obj/Generated/Abp.SourceGenerators/`.
 
 ### 한국어
 
@@ -310,7 +310,7 @@ AutoMapper 제거
 
 애플리케이션 서비스 및 기타 대상 타입의 인터셉션을 Castle `DynamicProxy`에서 `Abp.SourceGenerators` 기반 compile-time 경로로 옮기는 방법입니다. Castle 경로와 compile-time 경로는 **동시에 사용하지 않습니다**. compile-time 인터셉션을 켜면 Castle 인터셉터 등록기는 비활성화되고, 인터셉션 로직은 C# 소스로 생성됩니다.
 
-**참고 샘플:** [`test/Abp.NativeAot.SampleWebApp`](test/Abp.NativeAot.SampleWebApp)
+**참고 샘플 (NativeAOT):** [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host) — `<PublishAot>true</PublishAot>` compile-time 인터셉션 호스트. AOT 런타임은 아직 완전하지 않음(Castle Windsor); 로드맵 2단계 전까지는 JIT `dotnet run`으로 수동 확인.
 
 **1. 프로젝트 참조 추가**
 
@@ -505,7 +505,7 @@ Validation → Auditing → EntityHistory → UnitOfWork → Authorization → �
 
 **5. 사용자 정의 인터셉터**
 
-트리거 속성 패턴 (권장; `test/Abp.NativeAot.SampleWebApp/Interceptors/TaggedCompileTimeInterceptor.cs` 참고):
+트리거 속성 패턴 (권장; `test/Abp.Interception.CompileTime.Host/Interceptors/TaggedCompileTimeInterceptor.cs` 참고):
 
 ```csharp
 [AbpInterceptor(typeof(TaggedAttribute))]
@@ -537,7 +537,7 @@ public class MyAppService : ApplicationService { /* ... */ }
 
 **8. 검증**
 
-[`test/Abp.SourceGenerators.Tests`](test/Abp.SourceGenerators.Tests) 실행 또는 [`test/Abp.NativeAot.SampleWebApp`](test/Abp.NativeAot.SampleWebApp)으로 확인. `EmitCompilerGeneratedFiles`가 켜져 있으면 생성 코드는 `obj/Generated/Abp.SourceGenerators/`에서 볼 수 있습니다.
+[`test/Abp.Interception.CompileTime.Tests`](test/Abp.Interception.CompileTime.Tests) 실행 — [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host) 대상 통합 테스트. 호스트 프로젝트에 `EmitCompilerGeneratedFiles`가 켜져 있으면 생성 코드는 `obj/Generated/Abp.SourceGenerators/`에서 볼 수 있습니다.
 
 > ### End of Support Announcement
 > Support for ASP.NET Boilerplate will officially end in **May 2026**. However, we will continue to provide support for [ASP.NET Zero](https://aspnetzero.com/?utm_source=referral&utm_medium=github&utm_campaign=github_zerowebsite_redirection) **customers** using ASP.NET Boilerplate. For those looking for an open-source alternative, we recommend migrating to [ABP Framework](https://abp.io/?utm_source=referral&utm_medium=github&utm_campaign=github_abpwebsite_redirection). For the full story, [read the end of life announcement](https://aspnetboilerplate.com/endofsupport?utm_source=referral&utm_medium=github&utm_campaign=github_zboilerplate_announcement_redirection).

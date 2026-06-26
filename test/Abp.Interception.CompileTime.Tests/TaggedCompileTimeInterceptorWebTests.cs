@@ -1,12 +1,12 @@
-using System.Threading.Tasks;
-using Abp.NativeAot.SampleWebApp;
-using Abp.NativeAot.SampleWebApp.Interceptors;
+using Abp.Interception.CompileTime.Host;
+using Abp.Interception.CompileTime.Host.Interceptors;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
-namespace Abp.SourceGenerators.Tests;
+namespace Abp.Interception.CompileTime.Tests;
 
-public class TaggedCompileTimeInterceptorWebTests : IClassFixture<WebApplicationFactory<Startup>>
+[Collection("CompileTimeHost")]
+public class TaggedCompileTimeInterceptorWebTests
 {
     private readonly WebApplicationFactory<Startup> _factory;
 
@@ -26,7 +26,6 @@ public class TaggedCompileTimeInterceptorWebTests : IClassFixture<WebApplication
         Assert.Contains("Hello from compile-time intercepted AppService", response);
         Assert.Equal(1, TaggedCompileTimeInterceptor.InvocationCount);
         Assert.Contains("[tag:demo]", response);
-        Assert.Equal(1, TaggedCompileTimeInterceptor.InvocationCount);
         Assert.Equal("demo", TaggedCompileTimeInterceptor.LastTag);
     }
 

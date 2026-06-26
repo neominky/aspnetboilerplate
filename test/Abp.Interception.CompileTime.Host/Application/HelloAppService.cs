@@ -1,8 +1,8 @@
 using Abp.Application.Services;
-using Abp.NativeAot.SampleWebApp.Interceptors;
+using Abp.Interception.CompileTime.Host.Interceptors;
 using Abp.Runtime.Validation;
 
-namespace Abp.NativeAot.SampleWebApp.Application;
+namespace Abp.Interception.CompileTime.Host.Application;
 
 public class HelloAppService : ApplicationService, IHelloAppService
 {
