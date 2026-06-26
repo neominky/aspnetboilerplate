@@ -27,7 +27,12 @@ public class Startup
         app.UseEndpoints(endpoints =>
         {
             endpoints.MapGet("/api/hello", (IHelloAppService helloAppService) => helloAppService.SayHello());
+            endpoints.MapGet("/api/hello-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloTaskAsync());
             endpoints.MapGet("/api/hello-value-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloValueTaskAsync());
+            endpoints.MapGet("/api/hello-struct-tagged", (IHelloAppService helloAppService) => helloAppService.SayHelloStructTagged());
+            endpoints.MapGet("/api/hello-struct-tagged-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructTaggedTaskAsync());
+            endpoints.MapGet("/api/hello-struct-tagged-value-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructTaggedValueTaskAsync());
+            endpoints.MapGet("/api/hello-audited-tagged", (IHelloAppService helloAppService) => helloAppService.SayHelloAuditedAndTagged());
 
             endpoints.MapGet("/api/builtin/audited", (IBuiltInAspectAppService service) => service.GetAuditedMessage());
             endpoints.MapGet("/api/builtin/unit-of-work", (IBuiltInAspectAppService service) => service.GetUnitOfWorkActive());

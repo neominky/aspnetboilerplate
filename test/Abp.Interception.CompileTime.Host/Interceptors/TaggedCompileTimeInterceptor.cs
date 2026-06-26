@@ -18,6 +18,9 @@ public sealed class TaggedAttribute : Attribute
     }
 }
 
+/// <summary>
+/// Custom interceptor using class-bridge async paths (<see cref="AbpInterceptorBase.InternalInterceptAsynchronous(IAbpInvocation)"/>).
+/// </summary>
 [AbpInterceptor(typeof(TaggedAttribute))]
 public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransientDependency
 {
@@ -33,14 +36,7 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
 
     public override void InterceptSynchronous(IAbpInvocation invocation)
     {
-        InvocationCount++;
-
-        var tag = TryGetTag(invocation);
-        if (tag != null)
-        {
-            LastTag = tag;
-        }
-
+        var tag = ApplyTag(invocation.MethodInvocationTarget, invocation.InvocationTarget);
         invocation.Proceed();
 
         if (tag != null && invocation.ReturnValue is string text)
@@ -51,13 +47,7 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
 
     protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
     {
-        InvocationCount++;
-
-        var tag = TryGetTag(invocation);
-        if (tag != null)
-        {
-            LastTag = tag;
-        }
+        ApplyTag(invocation.Method, invocation.InvocationTarget);
 
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
@@ -66,13 +56,7 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
 
     protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
     {
-        InvocationCount++;
-
-        var tag = TryGetTag(invocation);
-        if (tag != null)
-        {
-            LastTag = tag;
-        }
+        var tag = ApplyTag(invocation.Method, invocation.InvocationTarget);
 
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
@@ -86,9 +70,22 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
         return result;
     }
 
-    private static string? TryGetTag(IAbpInvocation invocation)
+    private static string? ApplyTag(MethodInfo methodInvocationTarget, object invocationTarget)
     {
-        var taggedAttribute = invocation.MethodInvocationTarget
+        InvocationCount++;
+
+        var tag = TryGetTag(methodInvocationTarget, invocationTarget);
+        if (tag != null)
+        {
+            LastTag = tag;
+        }
+
+        return tag;
+    }
+
+    private static string? TryGetTag(MethodInfo methodInvocationTarget, object invocationTarget)
+    {
+        var taggedAttribute = methodInvocationTarget
             .GetCustomAttributes(typeof(TaggedAttribute), inherit: true)
             .OfType<TaggedAttribute>()
             .FirstOrDefault();
@@ -97,8 +94,8 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
             return taggedAttribute.Tag;
         }
 
-        var targetType = invocation.InvocationTarget.GetType();
-        var method = targetType.GetMethod(invocation.MethodInvocationTarget.Name);
+        var targetType = invocationTarget.GetType();
+        var method = targetType.GetMethod(methodInvocationTarget.Name);
         return method?.GetCustomAttribute<TaggedAttribute>()?.Tag;
     }
 }

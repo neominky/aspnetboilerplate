@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Abp.Interception.CompileTime.Host.Application;
 using Abp.Interception.CompileTime.Host.Infrastructure;
+using Abp.Interception.CompileTime.Host.Interceptors;
 using Abp.Runtime.Validation;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
@@ -23,6 +24,8 @@ public class BuiltInInterceptorWebTests
     [Fact]
     public async Task Api_builtin_audited_should_save_audit_log()
     {
+        TaggedCompileTimeInterceptor.ResetForTest();
+        StructTaggedCompileTimeInterceptor.ResetForTest();
         TestAuditingStore.ResetForTest();
 
         var client = _factory.CreateClient();
@@ -36,6 +39,9 @@ public class BuiltInInterceptorWebTests
     [Fact]
     public async Task Api_builtin_unit_of_work_should_begin_unit_of_work()
     {
+        TaggedCompileTimeInterceptor.ResetForTest();
+        StructTaggedCompileTimeInterceptor.ResetForTest();
+
         var client = _factory.CreateClient();
         var response = await client.GetStringAsync("/api/builtin/unit-of-work");
 
@@ -45,6 +51,9 @@ public class BuiltInInterceptorWebTests
     [Fact]
     public async Task Api_builtin_validate_should_reject_invalid_input()
     {
+        TaggedCompileTimeInterceptor.ResetForTest();
+        StructTaggedCompileTimeInterceptor.ResetForTest();
+
         var client = _factory.CreateClient();
         using var content = new StringContent("{\"name\":\"\"}", Encoding.UTF8, "application/json");
 
@@ -58,6 +67,9 @@ public class BuiltInInterceptorWebTests
     [Fact]
     public async Task Api_builtin_validate_should_accept_valid_input()
     {
+        TaggedCompileTimeInterceptor.ResetForTest();
+        StructTaggedCompileTimeInterceptor.ResetForTest();
+
         var client = _factory.CreateClient();
         using var content = new StringContent("{\"name\":\"neo\"}", Encoding.UTF8, "application/json");
         var response = await client.PostAsync("/api/builtin/validate", content);
@@ -69,6 +81,8 @@ public class BuiltInInterceptorWebTests
     [Fact]
     public async Task Api_builtin_authorized_should_check_permission()
     {
+        TaggedCompileTimeInterceptor.ResetForTest();
+        StructTaggedCompileTimeInterceptor.ResetForTest();
         TestPermissionChecker.ResetForTest();
 
         var client = _factory.CreateClient();

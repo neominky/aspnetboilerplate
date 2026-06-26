@@ -112,14 +112,14 @@ Typical ABP apps today use Castle `DynamicProxy` via `Abp.Interception.Castle`: 
 | App service resolve | Concrete type + Castle proxy | IoC resolves `{Service}_Intercepted` decorator (generated) |
 | Custom interceptors | Often Castle-specific wiring | `AbpInterceptorBase` + `ITransientDependency` + `[AbpInterceptor(typeof(TriggerAttribute))]` (or `[AbpIntercept]`) in the **same assembly** |
 
-Application service classes (`IApplicationService` implementations) usually need **no code changes**. Built-in aspects (`[AbpAuthorize]`, `[Audited]`, `[UnitOfWork]`, `[DisableValidation]`, `[UseCase]`, and related attributes) are analyzed at compile time and baked into `AbpMethodInterceptionMetadata`, registered at startup from generated `{Name}_Relay` static constructors via `AbpMethodInterceptionMetadataProvider`.
+Application service classes (`IApplicationService` implementations) usually need **no code changes**. Built-in aspects (`[AbpAuthorize]`, `[Audited]`, `[UnitOfWork]`, `[DisableValidation]`, `[UseCase]`, and related attributes) are analyzed at compile time and baked into `AbpMethodInterceptionMetadata`, registered at startup from generated `{Name}_Intercepted` static constructors via `AbpMethodInterceptionMetadataProvider`.
 
 #### Projects and responsibilities
 
 | Project | Role |
 |:--------|:-----|
-| `Abp.SourceGenerators` | Roslyn source generator. Emits `{Service}_Intercepted`, `{Service}_Relay`, module IoC partials, and metadata registration. |
-| `Abp.SourceGenerators.Runtime` | Runtime support in namespace `Abp.Dependency.CompileTime` (attributes, `CompileTimeInterceptionConfiguration`, `CompileTimeAbpInvocation`, IoC extensions). |
+| `Abp.SourceGenerators` | Roslyn source generator. Emits `{Service}_Intercepted`, module IoC partials, and metadata registration. |
+| `Abp.SourceGenerators.Runtime` | Runtime support in namespace `Abp.Dependency.CompileTime` (`CompileTimeInterceptionConfiguration`, `AbpInvocationCompileTime`, `AbpInvocationStruct`, `AbpInterceptorBaseAllocationFree`, `IAbpInterceptorSync` / `Task` / `ValueTask` async interfaces, IoC extensions). |
 | `Abp` | Shared runtime model: `AbpMethodInfo`, `AbpMethodInterceptionMetadata`, `AbpMethodInterceptionMetadataProvider`, `IAbpInvocation`, framework helpers with metadata fast paths. |
 | `Abp.Interception.Castle` | Default Castle DynamicProxy path when compile-time interception is **not** enabled. |
 
@@ -127,7 +127,7 @@ Application service classes (`IApplicationService` implementations) usually need
 
 #### API and abstraction changes
 
-Castle reflection and compile-time metadata share the same runtime APIs. **Custom interceptors should use `IAbpInvocation`; framework helpers keep `MethodInfo`-based interfaces** and consult baked metadata when present.
+Castle reflection and compile-time metadata share the same runtime APIs. **Class-bridge custom interceptors use `IAbpInvocation`; allocation-free custom interceptors override `protected Internal*` on stack `AbpInvocationStruct` types.** Framework helpers keep `MethodInfo`-based interfaces and consult baked metadata when present.
 
 | Area | Before | After |
 |:-----|:-------|:------|
@@ -145,7 +145,7 @@ Castle reflection and compile-time metadata share the same runtime APIs. **Custo
 **Metadata model** (in `Abp.Dependency`):
 
 - `AbpMethodInterceptionMetadata` — baked fields (`ShouldAudit`, `ShouldValidate`, `UnitOfWorkAttribute`, `AuthorizeAttributes`, …)
-- `AbpMethodInterceptionMetadataProvider.Instance` — runtime registry populated by generated `{Name}_Relay` static constructors
+- `AbpMethodInterceptionMetadataProvider.Instance` — runtime registry populated by generated `{Name}_Intercepted` static constructors
 - `AbpMethodInfo` — `MethodInfo` subclass; `AbpMethodInfo.GetInvocationMethod` / `TryGetMetadata` unify Castle and compile-time paths
 
 Generated code resolves method names with `nameof(Type.Method)` so renames are refactor-safe.
@@ -217,8 +217,7 @@ For each type that requires compile-time interception, the generator emits:
 
 | Artifact | Role |
 |----------|------|
-| `{Name}_Intercepted` | IoC-registered decorator (`ITransientDependency`, `[DisableConventionalRegistration]`) |
-| `{Name}_Relay` | Static methods with inlined interceptor chains; static ctor registers `AbpMethodInterceptionMetadata` |
+| `{Name}_Intercepted` | IoC-registered decorator (`ITransientDependency`, `[DisableConventionalRegistration]`); static ctor registers `AbpMethodInterceptionMetadata` |
 | `{Module}.CompileTime.g.cs` | Module partial with `RegisterAssemblyByConvention(IIocManager)` |
 
 **Eligibility** (any of):
@@ -236,19 +235,63 @@ Validation → Auditing → EntityHistory → UnitOfWork → Authorization → u
 
 Supported method return types: `void`, sync `T`, `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`.
 
+#### Compile-time execution paths
+
+Generated methods run through stack `AbpInvocationStruct` / `AbpInvocationStruct<TAsync>` and `CompileTimeInvocationInterceptorExecutor`. Built-in interceptors (`AuthorizationInterceptor`, `AuditingInterceptor`, …) inherit `AbpInterceptorBase` only and always use the **class-bridge** path (`AbpInvocationCompileTime` implementing `IAbpInvocation`).
+
+User interceptors are routed per method layer:
+
+| Return shape | Class-bridge (`AbpInterceptorBase`) | Allocation-free (`AbpInterceptorBaseAllocationFree`) |
+|:-------------|:------------------------------------|:-----------------------------------------------------|
+| sync | `RunSyncLayer` → `InterceptSynchronous(IAbpInvocation)` | `RunSyncAllocationFreeLayer` → `IAbpInterceptorSync` → `protected InternalInterceptSynchronous(ref AbpInvocationStruct)` |
+| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → `protected InternalInterceptAsynchronous(ref AbpInvocationStruct<Task[...]>)` |
+| `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` (Task-compatible bridge) | `RunValueTaskAllocationFreeLayer`, or `RunValueTaskViaTaskStructLayer` when only Task struct `Internal*` is overridden |
+
+`AbpInvocationCompileTimeAsyncBridge` connects struct layers to class-bridge interceptors when built-in and user interceptors are mixed in one chain. For allocation-free interceptors it calls `IAbpInterceptorSync` / `IAbpInterceptorTaskAsync` / `IAbpInterceptorValueTaskAsync` directly (no `IAbpInvocation` on the compile-time path).
+
+The generator picks allocation-free routing when `AllocationFreeInterceptorAnalyzer` finds non–proceed-only overrides of `protected Internal*` struct methods on `AbpInterceptorBaseAllocationFree`.
+
 #### 5. User-defined interceptors
 
-Trigger attribute (recommended; see `test/Abp.Interception.CompileTime.Host/Interceptors/TaggedCompileTimeInterceptor.cs`):
+**Class-bridge** (recommended default; same pattern as built-in interceptors). See `test/Abp.Interception.CompileTime.Host/Interceptors/TaggedCompileTimeInterceptor.cs`:
 
 ```csharp
 [AbpInterceptor(typeof(TaggedAttribute))]
 public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransientDependency
 {
     public override void InterceptSynchronous(IAbpInvocation invocation) { /* ... */ }
-    protected override Task InternalInterceptAsynchronous(IAbpInvocation invocation) { /* ... */ }
-    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation) { /* ... */ }
-}
 
+    protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation) { /* ... */ }
+
+    protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation) { /* ... */ }
+}
+```
+
+`ValueTask` returning application methods still enter the same `InternalInterceptAsynchronous` / `InternalInterceptAsynchronous<TResult>` overrides; the executor materializes `ValueTask` to `Task` at the bridge when needed.
+
+**Allocation-free** (optional; fewer heap allocations on the user interceptor layer). Inherit `AbpInterceptorBaseAllocationFree` and override `protected Internal*` struct methods only — do **not** override public `InterceptSynchronous(ref …)` / `InterceptAsynchronous(ref …)`. See `test/Abp.Interception.CompileTime.Host/Interceptors/StructTaggedCompileTimeInterceptor.cs`:
+
+```csharp
+[AbpInterceptor(typeof(StructTaggedAttribute))]
+public sealed class StructTaggedCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
+{
+    protected override void InternalInterceptSynchronous(ref AbpInvocationStruct invocation) { /* ... */ }
+
+    protected override Task InternalInterceptAsynchronous(ref AbpInvocationStruct<Task> invocation) { /* ... */ }
+
+    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<Task<TResult>> invocation) { /* ... */ }
+
+    protected override ValueTask InternalInterceptAsynchronous(ref AbpInvocationStruct<ValueTask> invocation) { /* ... */ }
+
+    protected override ValueTask<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<ValueTask<TResult>> invocation) { /* ... */ }
+}
+```
+
+`AbpInterceptorBaseAllocationFree` also implements Castle / legacy `IAbpInvocation` entry points by adapting into stack structs and forwarding to the same `protected Internal*` methods.
+
+Trigger attribute pattern:
+
+```csharp
 [Tagged("demo")]
 public class MyAppService : ApplicationService { /* ... */ }
 ```
@@ -274,7 +317,15 @@ For full AOT publish, see the sample project:
 
 #### 8. Verify
 
-Run [`test/Abp.Interception.CompileTime.Tests`](test/Abp.Interception.CompileTime.Tests) against [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host). With `EmitCompilerGeneratedFiles` on the host project, generated sources appear under `obj/Generated/Abp.SourceGenerators/`.
+Run [`test/Abp.Interception.CompileTime.Tests`](test/Abp.Interception.CompileTime.Tests) against [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host):
+
+| Test class | What it checks |
+|:-----------|:---------------|
+| `TaggedCompileTimeInterceptorWebTests` | User interceptor via class-bridge (`AbpInterceptorBase` + `IAbpInvocation`) |
+| `StructAllocationFreeInterceptorWebTests` | User interceptor via allocation-free struct path (`AbpInterceptorBaseAllocationFree`) |
+| `BuiltInInterceptorWebTests` | Built-in auditing with user interceptors in the same chain |
+
+With `EmitCompilerGeneratedFiles` on the host project, generated sources appear under `obj/Generated/Abp.SourceGenerators/`.
 
 ### 한국어
 
@@ -383,14 +434,14 @@ public partial class MyModule : AbpModule
 | 앱 서비스 resolve | 구현 타입 + Castle 프록시 | IoC가 생성된 `{Service}_Intercepted` 데코레이터 resolve |
 | 사용자 인터셉터 | Castle 전용 wiring | 애플리케이션 서비스와 **같은 어셈블리**의 `AbpInterceptorBase` + `ITransientDependency` + `[AbpInterceptor(typeof(TriggerAttribute))]` (또는 `[AbpIntercept]`) |
 
-`IApplicationService` 구현 클래스는 대부분 **코드 변경 없이** 동작합니다. `[AbpAuthorize]`, `[Audited]`, `[UnitOfWork]`, `[DisableValidation]`, `[UseCase]` 등 내장 aspect는 compile-time에 분석되어 `AbpMethodInterceptionMetadata`로 bake되며, 생성된 `{Name}_Relay` 정적 생성자가 `AbpMethodInterceptionMetadataProvider`에 등록합니다.
+`IApplicationService` 구현 클래스는 대부분 **코드 변경 없이** 동작합니다. `[AbpAuthorize]`, `[Audited]`, `[UnitOfWork]`, `[DisableValidation]`, `[UseCase]` 등 내장 aspect는 compile-time에 분석되어 `AbpMethodInterceptionMetadata`로 bake되며, 생성된 `{Name}_Intercepted` 정적 생성자가 `AbpMethodInterceptionMetadataProvider`에 등록합니다.
 
 **프로젝트 역할**
 
 | 프로젝트 | 역할 |
 |:---------|:-----|
-| `Abp.SourceGenerators` | Roslyn 소스 생성기. `{Service}_Intercepted`, `{Service}_Relay`, 모듈 IoC partial, 메타데이터 등록 코드 생성. |
-| `Abp.SourceGenerators.Runtime` | `Abp.Dependency.CompileTime` 네임스페이스의 런타임 지원 (속성, `CompileTimeInterceptionConfiguration`, `CompileTimeAbpInvocation`, IoC 확장). |
+| `Abp.SourceGenerators` | Roslyn 소스 생성기. `{Service}_Intercepted`, 모듈 IoC partial, 메타데이터 등록 코드 생성. |
+| `Abp.SourceGenerators.Runtime` | `Abp.Dependency.CompileTime` 네임스페이스의 런타임 지원 (`CompileTimeInterceptionConfiguration`, `AbpInvocationCompileTime`, `AbpInvocationStruct`, `AbpInterceptorBaseAllocationFree`, `IAbpInterceptorSync` / Task / ValueTask async 인터페이스, IoC 확장). |
 | `Abp` | 공유 런타임 모델: `AbpMethodInfo`, `AbpMethodInterceptionMetadata`, `AbpMethodInterceptionMetadataProvider`, `IAbpInvocation`, 메타데이터 fast path를 가진 프레임워크 헬퍼. |
 | `Abp.Interception.Castle` | compile-time 인터셉션이 **비활성**일 때의 기본 Castle DynamicProxy 경로. |
 
@@ -398,7 +449,7 @@ public partial class MyModule : AbpModule
 
 **API 및 추상화 변경**
 
-Castle 리플렉션과 compile-time 메타데이터가 동일한 런타임 API를 공유합니다. **사용자 인터셉터는 `IAbpInvocation`을 사용**하고, **프레임워크 헬퍼는 기존 `MethodInfo` 기반 인터페이스를 유지**하며 bake된 메타데이터가 있으면 우선 사용합니다.
+Castle 리플렉션과 compile-time 메타데이터가 동일한 런타임 API를 공유합니다. **class-bridge 사용자 인터셉터는 `IAbpInvocation`을, allocation-free 사용자 인터셉터는 스택 `AbpInvocationStruct`의 `protected Internal*`를 override합니다.** 프레임워크 헬퍼는 기존 `MethodInfo` 기반 인터페이스를 유지하며 bake된 메타데이터가 있으면 우선 사용합니다.
 
 | 영역 | 이전 | 이후 |
 |:-----|:-----|:-----|
@@ -416,7 +467,7 @@ Castle 리플렉션과 compile-time 메타데이터가 동일한 런타임 API�
 **메타데이터 모델** (`Abp.Dependency`):
 
 - `AbpMethodInterceptionMetadata` — bake된 필드 (`ShouldAudit`, `ShouldValidate`, `UnitOfWorkAttribute`, `AuthorizeAttributes`, …)
-- `AbpMethodInterceptionMetadataProvider.Instance` — 생성된 `{Name}_Relay` 정적 생성자가 채우는 런타임 레지스트리
+- `AbpMethodInterceptionMetadataProvider.Instance` — 생성된 `{Name}_Intercepted` 정적 생성자가 채우는 런타임 레지스트리
 - `AbpMethodInfo` — `MethodInfo` 서브클래스; `GetInvocationMethod` / `TryGetMetadata`로 Castle·compile-time 경로 통합
 
 생성 코드는 `nameof(Type.Method)`로 메서드 이름을 해석하여 리팩터링에 안전합니다.
@@ -484,8 +535,7 @@ compile-time 인터셉션이 필요한 각 타입에 대해 생성기가 다음�
 
 | 생성물 | 역할 |
 |--------|------|
-| `{Name}_Intercepted` | IoC 등록 데코레이터 (`ITransientDependency`, `[DisableConventionalRegistration]`) |
-| `{Name}_Relay` | 인터셉터 체인이 인라인된 static 메서드; 정적 생성자가 `AbpMethodInterceptionMetadata` 등록 |
+| `{Name}_Intercepted` | IoC 등록 데코레이터 (`ITransientDependency`, `[DisableConventionalRegistration]`); 정적 생성자가 `AbpMethodInterceptionMetadata` 등록 |
 | `{Module}.CompileTime.g.cs` | `RegisterAssemblyByConvention(IIocManager)` 모듈 partial |
 
 **대상 조건** (다음 중 하나):
@@ -503,19 +553,63 @@ Validation → Auditing → EntityHistory → UnitOfWork → Authorization → �
 
 지원 반환 형식: `void`, 동기 `T`, `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`.
 
+**compile-time 실행 경로**
+
+생성된 메서드는 스택 `AbpInvocationStruct` / `AbpInvocationStruct<TAsync>`와 `CompileTimeInvocationInterceptorExecutor`를 통해 실행됩니다. 내장 인터셉터(`AuthorizationInterceptor`, `AuditingInterceptor` 등)는 `AbpInterceptorBase`만 상속하며 항상 **class-bridge** 경로(`AbpInvocationCompileTime` / `IAbpInvocation`)를 사용합니다.
+
+사용자 인터셉터는 레이어별로 다음처럼 라우팅됩니다.
+
+| 반환 형태 | class-bridge (`AbpInterceptorBase`) | allocation-free (`AbpInterceptorBaseAllocationFree`) |
+|:----------|:-----------------------------------|:-------------------------------------------------------|
+| sync | `RunSyncLayer` → `InterceptSynchronous(IAbpInvocation)` | `RunSyncAllocationFreeLayer` → `IAbpInterceptorSync` → `protected InternalInterceptSynchronous(ref AbpInvocationStruct)` |
+| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → struct `Internal*` |
+| `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` (Task 호환 브리지) | `RunValueTaskAllocationFreeLayer`, 또는 Task struct `Internal*`만 있을 때 `RunValueTaskViaTaskStructLayer` |
+
+`AbpInvocationCompileTimeAsyncBridge`는 내장·사용자 인터셉터가 한 체인에 섞일 때 struct 레이어와 class-bridge 인터셉터를 연결합니다. allocation-free 인터셉터에는 compile-time 경로에서 `IAbpInterceptorSync` / `IAbpInterceptorTaskAsync` / `IAbpInterceptorValueTaskAsync`를 직접 호출합니다 (`IAbpInvocation` 미사용).
+
+생성기는 `AbpInterceptorBaseAllocationFree`에서 proceed-only가 아닌 `protected Internal*` struct override가 있으면 allocation-free 라우팅을 선택합니다 (`AllocationFreeInterceptorAnalyzer`).
+
 **5. 사용자 정의 인터셉터**
 
-트리거 속성 패턴 (권장; `test/Abp.Interception.CompileTime.Host/Interceptors/TaggedCompileTimeInterceptor.cs` 참고):
+**class-bridge** (기본 권장; 내장 인터셉터와 동일 패턴). `test/Abp.Interception.CompileTime.Host/Interceptors/TaggedCompileTimeInterceptor.cs` 참고:
 
 ```csharp
 [AbpInterceptor(typeof(TaggedAttribute))]
 public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransientDependency
 {
     public override void InterceptSynchronous(IAbpInvocation invocation) { /* ... */ }
-    protected override Task InternalInterceptAsynchronous(IAbpInvocation invocation) { /* ... */ }
-    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation) { /* ... */ }
-}
 
+    protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation) { /* ... */ }
+
+    protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation) { /* ... */ }
+}
+```
+
+`ValueTask` 반환 애플리케이션 메서드도 동일한 `InternalInterceptAsynchronous` / `InternalInterceptAsynchronous<TResult>`로 진입하며, 필요 시 executor가 브리지에서 `ValueTask`를 `Task`로 materialize합니다.
+
+**allocation-free** (선택; 사용자 인터셉터 레이어에서 heap 할당 감소). `AbpInterceptorBaseAllocationFree`를 상속하고 `protected Internal*` struct 메서드만 override합니다. public `InterceptSynchronous(ref …)` / `InterceptAsynchronous(ref …)`는 override하지 않습니다. `test/Abp.Interception.CompileTime.Host/Interceptors/StructTaggedCompileTimeInterceptor.cs` 참고:
+
+```csharp
+[AbpInterceptor(typeof(StructTaggedAttribute))]
+public sealed class StructTaggedCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
+{
+    protected override void InternalInterceptSynchronous(ref AbpInvocationStruct invocation) { /* ... */ }
+
+    protected override Task InternalInterceptAsynchronous(ref AbpInvocationStruct<Task> invocation) { /* ... */ }
+
+    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<Task<TResult>> invocation) { /* ... */ }
+
+    protected override ValueTask InternalInterceptAsynchronous(ref AbpInvocationStruct<ValueTask> invocation) { /* ... */ }
+
+    protected override ValueTask<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<ValueTask<TResult>> invocation) { /* ... */ }
+}
+```
+
+`AbpInterceptorBaseAllocationFree`는 Castle / legacy `IAbpInvocation` 진입점도 스택 struct로 어댑트한 뒤 동일한 `protected Internal*`로 전달합니다.
+
+트리거 속성 예:
+
+```csharp
 [Tagged("demo")]
 public class MyAppService : ApplicationService { /* ... */ }
 ```
@@ -537,7 +631,15 @@ public class MyAppService : ApplicationService { /* ... */ }
 
 **8. 검증**
 
-[`test/Abp.Interception.CompileTime.Tests`](test/Abp.Interception.CompileTime.Tests) 실행 — [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host) 대상 통합 테스트. 호스트 프로젝트에 `EmitCompilerGeneratedFiles`가 켜져 있으면 생성 코드는 `obj/Generated/Abp.SourceGenerators/`에서 볼 수 있습니다.
+[`test/Abp.Interception.CompileTime.Tests`](test/Abp.Interception.CompileTime.Tests) 실행 — [`test/Abp.Interception.CompileTime.Host`](test/Abp.Interception.CompileTime.Host) 대상 통합 테스트:
+
+| 테스트 클래스 | 검증 내용 |
+|:--------------|:----------|
+| `TaggedCompileTimeInterceptorWebTests` | class-bridge 사용자 인터셉터 (`AbpInterceptorBase` + `IAbpInvocation`) |
+| `StructAllocationFreeInterceptorWebTests` | allocation-free struct 경로 (`AbpInterceptorBaseAllocationFree`) |
+| `BuiltInInterceptorWebTests` | 내장 auditing과 사용자 인터셉터가 같은 체인에서 동작 |
+
+호스트 프로젝트에 `EmitCompilerGeneratedFiles`가 켜져 있으면 생성 코드는 `obj/Generated/Abp.SourceGenerators/`에서 볼 수 있습니다.
 
 > ### End of Support Announcement
 > Support for ASP.NET Boilerplate will officially end in **May 2026**. However, we will continue to provide support for [ASP.NET Zero](https://aspnetzero.com/?utm_source=referral&utm_medium=github&utm_campaign=github_zerowebsite_redirection) **customers** using ASP.NET Boilerplate. For those looking for an open-source alternative, we recommend migrating to [ABP Framework](https://abp.io/?utm_source=referral&utm_medium=github&utm_campaign=github_abpwebsite_redirection). For the full story, [read the end of life announcement](https://aspnetboilerplate.com/endofsupport?utm_source=referral&utm_medium=github&utm_campaign=github_zboilerplate_announcement_redirection).

@@ -14,6 +14,13 @@ internal static class AbpTypeNames
     {
         public const string AbpModule = "Abp.Modules.AbpModule";
         public const string AbpInterceptorBase = "Abp.Dependency.AbpInterceptorBase";
+        public const string AbpInterceptorBaseAllocationFree = "Abp.Dependency.CompileTime.AbpInterceptorBaseAllocationFree";
+        public const string AbpInvocationStruct = "Abp.Dependency.CompileTime.AbpInvocationStruct";
+        public const string AbpInvocationStructOpen = "Abp.Dependency.CompileTime.AbpInvocationStruct`1";
+        public const string Task = "System.Threading.Tasks.Task";
+        public const string TaskOpen = "System.Threading.Tasks.Task`1";
+        public const string ValueTask = "System.Threading.Tasks.ValueTask";
+        public const string ValueTaskOpen = "System.Threading.Tasks.ValueTask`1";
         public const string ITransientDependency = "Abp.Dependency.ITransientDependency";
         public const string ISingletonDependency = "Abp.Dependency.ISingletonDependency";
         public const string IApplicationService = "Abp.Application.Services.IApplicationService";
@@ -69,11 +76,16 @@ internal static class AbpTypeNames
         public const string IIocResolver = "global::Abp.Dependency.IIocResolver";
         public const string IIocManager = "global::Abp.Dependency.IIocManager";
         public const string AbpInterceptorBase = "global::Abp.Dependency.AbpInterceptorBase";
+        public const string IAbpInterceptorTaskAsync = "global::Abp.Dependency.CompileTime.IAbpInterceptorTaskAsync";
+        public const string IAbpInterceptorValueTaskAsync = "global::Abp.Dependency.CompileTime.IAbpInterceptorValueTaskAsync";
+        public const string IAbpInterceptorSync = "global::Abp.Dependency.CompileTime.IAbpInterceptorSync";
         public const string DependencyLifeStyleSingleton = "global::Abp.Dependency.DependencyLifeStyle.Singleton";
         public const string DependencyLifeStyleTransient = "global::Abp.Dependency.DependencyLifeStyle.Transient";
         public const string IAvoidDuplicateCrossCuttingConcerns = "global::Abp.Application.Services.IAvoidDuplicateCrossCuttingConcerns";
         public const string DisableConventionalRegistrationAttribute = "global::Abp.Dependency.CompileTime.DisableConventionalRegistration";
-        public const string CompileTimeAbpInvocation = "global::Abp.Dependency.CompileTime.CompileTimeAbpInvocation";
+        public const string AbpInvocationCompileTime = "global::Abp.Dependency.CompileTime.AbpInvocationCompileTime";
+        public const string AbpInvocationStruct = "global::Abp.Dependency.CompileTime.AbpInvocationStruct";
+        public const string AbpInvocationMethod = "global::Abp.Dependency.CompileTime.AbpInvocationMethod";
         public const string AbpMethodInterceptionMetadataProvider = "global::Abp.Dependency.AbpMethodInterceptionMetadataProvider";
         public const string AbpMethodInterceptionMetadata = "global::Abp.Dependency.AbpMethodInterceptionMetadata";
         public const string CompileTimeIocRegistrarRegistry = "global::Abp.Dependency.CompileTime.CompileTimeIocRegistrarRegistry";
@@ -91,7 +103,6 @@ internal static class AbpTypeNames
     internal static class GeneratedTypeSuffixes
     {
         public const string Intercepted = "_Intercepted";
-        public const string Relay = "_Relay";
         public const string CompileTimeModule = "_CompileTime";
     }
 }

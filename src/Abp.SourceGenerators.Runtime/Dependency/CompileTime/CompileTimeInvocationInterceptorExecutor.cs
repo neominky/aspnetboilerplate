@@ -7,99 +7,161 @@ namespace Abp.Dependency.CompileTime
     /// <summary>
     /// Routes <see cref="AbpInterceptorBase"/> calls for compile-time interception.
     /// Replaces Castle <c>AsyncDeterminationInterceptor</c> + <c>IInvocation.Proceed</c> wiring.
-    /// Each method matches a return shape baked by the source generator (no runtime type dispatch).
     /// </summary>
     public static class CompileTimeInvocationInterceptorExecutor
     {
-        public static async Task<T> ExecuteSynchronous<T>(
-            AbpInterceptorBase interceptor,
-            IAbpInvocation invocation,
-            Func<Task<T>> target)
+        public static void RunSyncAllocationFreeLayer(
+            ref AbpInvocationStruct invocation,
+            IAbpInterceptorSync interceptor,
+            Func<Task<object?>> next)
         {
-            ConfigureSynchronousProceed(invocation, target);
-            interceptor.InterceptSynchronous(invocation);
-            return invocation.ReturnValue is T typedValue ? typedValue : default!;
+            invocation.SetSyncProceed(next);
+            interceptor.InterceptSynchronous(ref invocation);
         }
 
-        public static async Task ExecuteAsynchronous(
+        public static void RunSyncLayer(
+            ref AbpInvocationStruct invocation,
             AbpInterceptorBase interceptor,
-            IAbpInvocation invocation,
-            Func<Task<object?>> target)
+            Func<Task<object?>> next)
         {
-            ConfigureVoidTaskProceed(invocation, target);
-            interceptor.InterceptAsynchronous(invocation);
-            await (Task)invocation.ReturnValue!;
-        }
+            invocation.SetSyncProceed(next);
 
-        public static async Task<T> ExecuteAsynchronous<T>(
-            AbpInterceptorBase interceptor,
-            IAbpInvocation invocation,
-            Func<Task<T>> target)
-        {
-            ConfigureGenericTaskProceed(invocation, target);
-            interceptor.InterceptAsynchronous<T>(invocation);
-            return await (Task<T>)invocation.ReturnValue!;
-        }
-
-        private static void ConfigureSynchronousProceed<T>(
-            IAbpInvocation invocation,
-            Func<Task<T>> target)
-        {
-            if (invocation is not ICompileTimeInvocationProceedHost host)
+            var bridge = new AbpInvocationCompileTime(
+                invocation.InvocationTarget,
+                invocation.Method,
+                invocation.Arguments);
+            bridge.ReturnValue = invocation.ReturnValue;
+            bridge.SetProceed(async () =>
             {
-                return;
-            }
-
-            host.SetProceed(async () =>
-            {
-                var result = await target().ConfigureAwait(false);
-                invocation.ReturnValue = result;
+                var result = await next();
+                bridge.ReturnValue = result;
                 return result;
             });
+
+            interceptor.InterceptSynchronous(bridge);
+            invocation.ReturnValue = bridge.ReturnValue ?? invocation.ReturnValue;
         }
 
-        private static void ConfigureVoidTaskProceed(
-            IAbpInvocation invocation,
-            Func<Task<object?>> target)
+        public static Task RunTaskAllocationFreeLayer(
+            ref AbpInvocationStruct<Task> invocation,
+            IAbpInterceptorTaskAsync interceptor,
+            Func<Task> next)
         {
-            if (invocation is not ICompileTimeInvocationProceedHost host)
-            {
-                return;
-            }
-
-            host.SetProceed(async () =>
-            {
-                var task = (Task)(object)await target().ConfigureAwait(false);
-                invocation.ReturnValue = task;
-                await task.ConfigureAwait(false);
-                return null;
-            });
+            invocation.SetProceed(next);
+            interceptor.InterceptAsynchronous(ref invocation);
+            return invocation.ReturnValue;
         }
 
-        private static void ConfigureGenericTaskProceed<T>(
-            IAbpInvocation invocation,
-            Func<Task<T>> target)
+        public static Task<T> RunTaskAllocationFreeLayer<T>(
+            ref AbpInvocationStruct<Task<T>> invocation,
+            IAbpInterceptorTaskAsync interceptor,
+            Func<Task<T>> next)
         {
-            if (invocation is not ICompileTimeInvocationProceedHost host)
-            {
-                return;
-            }
-
-            host.SetProceed(async () =>
-            {
-                var task = target();
-                invocation.ReturnValue = task;
-                await task.ConfigureAwait(false);
-                return null;
-            });
+            invocation.SetProceed(next);
+            interceptor.InterceptAsynchronous(ref invocation);
+            return invocation.ReturnValue;
         }
-    }
 
-    /// <summary>
-    /// Implemented by compile-time invocations to wire <see cref="IAbpInvocation.Proceed"/>.
-    /// </summary>
-    internal interface ICompileTimeInvocationProceedHost
-    {
-        void SetProceed(Func<Task<object?>> proceed);
+        public static Task RunTaskViaClassBridgeLayer(
+            ref AbpInvocationStruct<Task> invocation,
+            AbpInterceptorBase interceptor,
+            ref AbpInvocationCompileTime? classBridge,
+            Func<Task> next)
+        {
+            invocation.SetProceed(next);
+            AbpInvocationCompileTimeAsyncBridge.InterceptTaskVoid(ref invocation, interceptor, ref classBridge);
+            return invocation.ReturnValue;
+        }
+
+        public static Task<T> RunTaskViaClassBridgeLayer<T>(
+            ref AbpInvocationStruct<Task<T>> invocation,
+            AbpInterceptorBase interceptor,
+            ref AbpInvocationCompileTime<T>? classBridge,
+            Func<Task<T>> next)
+        {
+            invocation.SetProceed(next);
+            AbpInvocationCompileTimeAsyncBridge.InterceptTaskGeneric(ref invocation, interceptor, ref classBridge);
+            return invocation.ReturnValue;
+        }
+
+        public static ValueTask RunValueTaskAllocationFreeLayer(
+            ref AbpInvocationStruct<ValueTask> invocation,
+            IAbpInterceptorValueTaskAsync interceptor,
+            Func<ValueTask> next)
+        {
+            invocation.SetProceed(next);
+            interceptor.InterceptAsynchronous(ref invocation);
+            return invocation.ReturnValue;
+        }
+
+        public static ValueTask<T> RunValueTaskAllocationFreeLayer<T>(
+            ref AbpInvocationStruct<ValueTask<T>> invocation,
+            IAbpInterceptorValueTaskAsync interceptor,
+            Func<ValueTask<T>> next)
+        {
+            invocation.SetProceed(next);
+            interceptor.InterceptAsynchronous(ref invocation);
+            return invocation.ReturnValue;
+        }
+
+        public static ValueTask RunValueTaskViaTaskStructLayer(
+            ref AbpInvocationStruct<ValueTask> invocation,
+            IAbpInterceptorTaskAsync interceptor,
+            Func<ValueTask> next)
+        {
+            invocation.SetProceed(next);
+
+            var valueTaskInvocation = invocation;
+            var taskInvocation = default(AbpInvocationStruct<Task>);
+            taskInvocation.Initialize(
+                valueTaskInvocation.InvocationTarget,
+                valueTaskInvocation.InvocationMethod,
+                valueTaskInvocation.Arguments);
+            taskInvocation.SetProceed(() => AbpInvocationReturnValueMaterializer.AsTask(valueTaskInvocation.Proceed()));
+            interceptor.InterceptAsynchronous(ref taskInvocation);
+            invocation.ReturnValue = new ValueTask(taskInvocation.ReturnValue);
+            return invocation.ReturnValue;
+        }
+
+        public static ValueTask<T> RunValueTaskViaTaskStructLayer<T>(
+            ref AbpInvocationStruct<ValueTask<T>> invocation,
+            IAbpInterceptorTaskAsync interceptor,
+            Func<ValueTask<T>> next)
+        {
+            invocation.SetProceed(next);
+
+            var valueTaskInvocation = invocation;
+            var taskInvocation = default(AbpInvocationStruct<Task<T>>);
+            taskInvocation.Initialize(
+                valueTaskInvocation.InvocationTarget,
+                valueTaskInvocation.InvocationMethod,
+                valueTaskInvocation.Arguments);
+            taskInvocation.SetProceed(() => AbpInvocationReturnValueMaterializer.AsTask(valueTaskInvocation.Proceed()));
+            interceptor.InterceptAsynchronous(ref taskInvocation);
+            invocation.ReturnValue = new ValueTask<T>(taskInvocation.ReturnValue);
+            return invocation.ReturnValue;
+        }
+
+        public static ValueTask RunValueTaskViaClassBridgeLayer(
+            ref AbpInvocationStruct<ValueTask> invocation,
+            AbpInterceptorBase interceptor,
+            ref AbpInvocationCompileTime? classBridge,
+            Func<ValueTask> next)
+        {
+            invocation.SetProceed(next);
+            AbpInvocationCompileTimeAsyncBridge.InterceptValueTaskVoid(ref invocation, interceptor, ref classBridge);
+            return invocation.ReturnValue;
+        }
+
+        public static ValueTask<T> RunValueTaskViaClassBridgeLayer<T>(
+            ref AbpInvocationStruct<ValueTask<T>> invocation,
+            AbpInterceptorBase interceptor,
+            ref AbpInvocationCompileTime<T>? classBridge,
+            Func<ValueTask<T>> next)
+        {
+            invocation.SetProceed(next);
+            AbpInvocationCompileTimeAsyncBridge.InterceptValueTaskGeneric(ref invocation, interceptor, ref classBridge);
+            return invocation.ReturnValue;
+        }
     }
 }

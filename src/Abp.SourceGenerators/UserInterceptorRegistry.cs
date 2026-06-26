@@ -38,6 +38,7 @@ internal sealed class UserInterceptorRegistry
         }
 
         var builtInInterceptors = abp.ResolveBuiltInInterceptors(compilation);
+        var allocationFreeBase = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.AbpInterceptorBaseAllocationFree);
 
         var interceptors = new List<UserInterceptorInfo>();
         var seenFieldNames = new HashSet<string>(StringComparer.Ordinal);
@@ -71,10 +72,25 @@ internal sealed class UserInterceptorRegistry
             }
 
             var typeName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var valueTaskLayerKind = AllocationFreeInterceptorAnalyzer.ResolveValueTaskLayerKind(
+                type,
+                allocationFreeBase,
+                compilation);
+            var taskLayerKind = AllocationFreeInterceptorAnalyzer.ResolveTaskLayerKind(
+                type,
+                allocationFreeBase,
+                compilation);
+            var syncLayerKind = AllocationFreeInterceptorAnalyzer.ResolveSyncLayerKind(
+                type,
+                allocationFreeBase,
+                compilation);
             var field = new BakedInterceptorField(
                 fieldName,
                 $"({AbpTypeNames.FullyQualified.AbpInterceptorBase})iocResolver.Resolve(typeof({typeName}))",
-                typeName);
+                typeName,
+                valueTaskLayerKind,
+                taskLayerKind,
+                syncLayerKind);
 
             var abpInterceptorAttributes = type.GetAttributes()
                 .Where(a => a.AttributeClass?.Name == AbpTypeNames.Short.Attributes.AbpInterceptor)

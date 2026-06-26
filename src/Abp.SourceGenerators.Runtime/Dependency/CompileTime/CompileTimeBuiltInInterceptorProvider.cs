@@ -1,5 +1,6 @@
 using Abp.Auditing;
 using Abp.Authorization;
+using Abp.Dependency;
 using Abp.Domain.Uow;
 using Abp.EntityHistory;
 using Abp.Runtime.Validation.Interception;

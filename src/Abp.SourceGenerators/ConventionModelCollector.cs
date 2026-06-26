@@ -17,8 +17,6 @@ internal sealed class ConventionTypeModel
     public ImmutableArray<MethodModel> Methods { get; set; }
 
     public string InterceptedTypeName => $"{ImplementationType.Name}{AbpTypeNames.GeneratedTypeSuffixes.Intercepted}";
-
-    public string RelayClassName => $"{ImplementationType.Name}{AbpTypeNames.GeneratedTypeSuffixes.Relay}";
 }
 
 internal sealed class MethodModel
@@ -94,8 +92,7 @@ internal static class ConventionModelCollector
                 continue;
             }
 
-            if (symbol.Name.EndsWith(AbpTypeNames.GeneratedTypeSuffixes.Intercepted)
-                || symbol.Name.EndsWith(AbpTypeNames.GeneratedTypeSuffixes.Relay))
+            if (symbol.Name.EndsWith(AbpTypeNames.GeneratedTypeSuffixes.Intercepted))
             {
                 continue;
             }

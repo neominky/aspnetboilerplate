@@ -3,8 +3,6 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Abp.SourceGenerators;
 
@@ -29,18 +27,38 @@ internal static class InterceptorEmitter
         builder.AppendLine();
         builder.AppendLine($"namespace {ns};");
         builder.AppendLine();
-        builder.AppendLine("file sealed class InterceptsLocationAttribute : System.Attribute");
-        builder.AppendLine("{");
-        builder.AppendLine("    public InterceptsLocationAttribute(int version, string data) { }");
-        builder.AppendLine("}");
-        builder.AppendLine();
         builder.AppendLine($"[{AbpTypeNames.FullyQualified.DisableConventionalRegistrationAttribute}]");
         builder.AppendLine($"internal sealed class {model.InterceptedTypeName} : {GetPrimaryInterface(model)}, {AbpTypeNames.FullyQualified.ITransientDependency}{avoidDuplicateConcerns}");
         builder.AppendLine("{");
+
+        foreach (var method in model.Methods)
+        {
+            EmitMethodInfoField(builder, model, method);
+            if (method.AbpReflection)
+            {
+                EmitMetadataField(builder, method);
+            }
+        }
+
+        var abpReflectionMethods = model.Methods.Where(m => m.AbpReflection).ToImmutableArray();
+        if (!abpReflectionMethods.IsEmpty)
+        {
+            builder.AppendLine($"    static {model.InterceptedTypeName}()");
+            builder.AppendLine("    {");
+            foreach (var method in abpReflectionMethods)
+            {
+                EmitMetadataRegistration(builder, method);
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
         if (model.IsApplicationService)
         {
             builder.AppendLine("    public global::System.Collections.Generic.List<string> AppliedCrossCuttingConcerns { get; } = new();");
         }
+
         builder.AppendLine($"    private readonly {model.ImplementationTypeName} _inner;");
 
         if (!serviceInterceptors.IsDefaultOrEmpty)
@@ -81,35 +99,7 @@ internal static class InterceptorEmitter
 
         foreach (var method in model.Methods)
         {
-            EmitDecoratorMethod(builder, model, method, serviceInterceptors);
-        }
-
-        builder.AppendLine("}");
-        builder.AppendLine();
-        builder.AppendLine($"file static class {model.RelayClassName}");
-        builder.AppendLine("{");
-
-        foreach (var method in model.Methods)
-        {
-            EmitMethodInfoField(builder, model, method);
-        }
-
-        var abpReflectionMethods = model.Methods.Where(m => m.AbpReflection).ToImmutableArray();
-        if (!abpReflectionMethods.IsEmpty)
-        {
-            builder.AppendLine($"    static {model.RelayClassName}()");
-            builder.AppendLine("    {");
-            foreach (var method in abpReflectionMethods)
-            {
-                EmitMetadataRegistration(builder, method);
-            }
-            builder.AppendLine("    }");
-            builder.AppendLine();
-        }
-
-        foreach (var method in model.Methods)
-        {
-            EmitRelayMethods(compilation, builder, model, method, serviceInterceptors, userInterceptors);
+            EmitInterceptedMethod(builder, model, method, serviceInterceptors, userInterceptors);
         }
 
         builder.AppendLine("}");
@@ -128,80 +118,87 @@ internal static class InterceptorEmitter
                ?? model.ServiceInterfaces.First();
     }
 
-    private static string BuildInterceptorRelayArguments(ImmutableArray<BakedInterceptorField> serviceInterceptors)
-    {
-        if (serviceInterceptors.IsDefaultOrEmpty)
-        {
-            return string.Empty;
-        }
-
-        return ", " + string.Join(", ", serviceInterceptors.Select(interceptor => interceptor.FieldName));
-    }
-
-    private static void EmitDecoratorMethod(
-        StringBuilder builder,
-        ConventionTypeModel model,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> serviceInterceptors)
-    {
-        var interceptorArguments = BuildInterceptorRelayArguments(serviceInterceptors);
-        var methodArguments = method.ParameterList.Length > 0 ? ", " + method.ArgumentList : string.Empty;
-
-        builder.AppendLine($"    public {method.ReturnType} {method.Signature}");
-        builder.AppendLine("    {");
-        builder.AppendLine($"        return {model.RelayClassName}.{method.Name}(_inner{interceptorArguments}{methodArguments});");
-        builder.AppendLine("    }");
-        builder.AppendLine();
-    }
-
-    private static void EmitRelayMethods(
-        Compilation compilation,
+    private static void EmitInterceptedMethod(
         StringBuilder builder,
         ConventionTypeModel model,
         MethodModel method,
         ImmutableArray<BakedInterceptorField> serviceInterceptors,
         ImmutableArray<BakedInterceptorField> userInterceptors)
     {
-        var interceptorParameters = serviceInterceptors.IsDefaultOrEmpty
-            ? string.Empty
-            : ", " + string.Join(", ", serviceInterceptors.Select(interceptor => $"{AbpTypeNames.FullyQualified.AbpInterceptorBase} {interceptor.FieldName}"));
+        var innerCallExpression = method.ParameterList.Length == 0
+            ? $"_inner.{method.Name}()"
+            : $"_inner.{method.Name}({method.ArgumentList})";
 
-        var relayParameters = $"{model.ImplementationTypeName} inner{interceptorParameters}"
-                              + (method.ParameterList.Length > 0 ? ", " + method.ParameterList : string.Empty);
-
-        var relayBody = method.ParameterList.Length == 0
-            ? $"inner.{method.Name}()"
-            : $"inner.{method.Name}({method.ArgumentList})";
-
-        EmitInlineRelay(builder, model, method, relayParameters, relayBody, userInterceptors);
-    }
-
-    private static void EmitInlineRelay(
-        StringBuilder builder,
-        ConventionTypeModel model,
-        MethodModel method,
-        string relayParameters,
-        string relayBody,
-        ImmutableArray<BakedInterceptorField> userInterceptors)
-    {
-        builder.AppendLine($"    public static{(method.IsAsync ? " async" : "")} {method.ReturnType} {method.Name}({relayParameters})");
+        var useValueTaskMethod = method.IsAsync && IsValueTaskReturnType(method.ReturnType);
+        var useTaskStructMethod = method.IsAsync && IsTaskReturnType(method.ReturnType);
+        builder.AppendLine($"    public {method.ReturnType} {method.Signature}");
         builder.AppendLine("    {");
-        EmitValidation(builder, method);
-        builder.AppendLine($"        var invocation = {BuildInvocationBlock(model, method)};");
-        EmitCompiledInterceptorChain(
+
+        if (useValueTaskMethod)
+        {
+            EmitAsyncInvocationSetup(builder, method, isTask: false);
+        }
+        else if (useTaskStructMethod)
+        {
+            EmitAsyncInvocationSetup(builder, method, isTask: true);
+        }
+        else if (!method.IsAsync)
+        {
+            EmitAbpInvocationStructSetup(builder, method);
+        }
+
+        EmitLinearInterceptorChain(
             builder,
             method,
-            relayBody,
-            AspectAnalyzer.GetMethodInterceptorFields(method.Aspect, model.IsApplicationService, userInterceptors));
+            innerCallExpression,
+            AspectAnalyzer.GetMethodInterceptorFields(method.Aspect, model.IsApplicationService, userInterceptors),
+            useValueTaskMethod,
+            useTaskStructMethod);
         builder.AppendLine("    }");
         builder.AppendLine();
     }
 
-    private static void EmitCompiledInterceptorChain(
+    private static void EmitAbpInvocationStructSetup(StringBuilder builder, MethodModel method)
+    {
+        var argumentsExpression = method.ArgumentList.Length == 0
+            ? "global::System.Array.Empty<object?>()"
+            : $"new object?[] {{ {method.ArgumentList} }}";
+
+        var invocationMethodExpression = GetInvocationMethodExpression(method);
+        builder.AppendLine($"        var invocation = default({AbpTypeNames.FullyQualified.AbpInvocationStruct});");
+        builder.AppendLine($"        invocation.Initialize(_inner, {invocationMethodExpression}, {argumentsExpression});");
+    }
+
+    private static void EmitAsyncInvocationSetup(StringBuilder builder, MethodModel method, bool isTask)
+    {
+        var argumentsExpression = method.ArgumentList.Length == 0
+            ? "global::System.Array.Empty<object?>()"
+            : $"new object?[] {{ {method.ArgumentList} }}";
+
+        var invocationType = GetAsyncInvocationTypeName(method, isTask);
+        var invocationMethodExpression = GetInvocationMethodExpression(method);
+        builder.AppendLine($"        var invocation = default({invocationType});");
+        builder.AppendLine($"        invocation.Initialize(_inner, {invocationMethodExpression}, {argumentsExpression});");
+        builder.AppendLine($"        {GetAsyncClassBridgeTypeName(method)} classBridge = null;");
+    }
+
+    private static string GetAsyncClassBridgeTypeName(MethodModel method)
+    {
+        if (IsGenericAsyncReturnType(method.ReturnType, out var resultType))
+        {
+            return $"{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}>?";
+        }
+
+        return $"{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}?";
+    }
+
+    private static void EmitLinearInterceptorChain(
         StringBuilder builder,
         MethodModel method,
         string innerCallExpression,
-        ImmutableArray<BakedInterceptorField> interceptors)
+        ImmutableArray<BakedInterceptorField> interceptors,
+        bool useValueTaskMethod,
+        bool useTaskStructMethod)
     {
         if (interceptors.IsDefaultOrEmpty)
         {
@@ -215,24 +212,291 @@ internal static class InterceptorEmitter
             return;
         }
 
-        var innerChain = BuildInnerChainExpression(method, innerCallExpression);
-        var nestedChain = BuildNestedInterceptorChainExpression(method, interceptors, "invocation", innerChain);
+        var executor = AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor;
 
-        if (!method.IsAsync)
+        if (useValueTaskMethod)
         {
-            if (method.ReturnType == "void")
-            {
-                builder.AppendLine($"        {nestedChain}.GetAwaiter().GetResult();");
-            }
-            else
-            {
-                builder.AppendLine($"        return {nestedChain}.GetAwaiter().GetResult();");
-            }
-
+            EmitMultilineValueTaskLayerChain(builder, executor, method, interceptors, innerCallExpression);
             return;
         }
 
-        EmitAwaitedReturn(builder, method, nestedChain);
+        if (!method.IsAsync)
+        {
+            EmitMultilineSyncLayerChain(builder, executor, method, interceptors, innerCallExpression);
+
+            if (method.ReturnType == "void")
+            {
+                return;
+            }
+
+            builder.AppendLine($"        return ({method.ReturnType})invocation.ReturnValue!;");
+            return;
+        }
+
+        if (useTaskStructMethod)
+        {
+            EmitMultilineTaskLayerChain(builder, executor, method, interceptors, innerCallExpression);
+        }
+    }
+
+    private static string GetIndent(int depth) => new string(' ', 8 + depth * 4);
+
+    private static void EmitMultilineSyncLayerChain(
+        StringBuilder builder,
+        string executor,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string innerCallExpression)
+    {
+        EmitSyncLayerChainRecursive(builder, executor, method, interceptors, innerCallExpression, index: 0, layerDepth: 0);
+    }
+
+    private static void EmitSyncLayerChainRecursive(
+        StringBuilder builder,
+        string executor,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string innerCallExpression,
+        int index,
+        int layerDepth)
+    {
+        var indent = GetIndent(layerDepth);
+        var argIndent = GetIndent(layerDepth + 1);
+
+        builder.AppendLine($"{indent}{executor}.{GetSyncExecutorMethod(interceptors[index])}(");
+        builder.AppendLine($"{argIndent}ref invocation,");
+        builder.AppendLine($"{argIndent}{GetSyncInterceptorExpression(interceptors[index])},");
+        builder.AppendLine($"{argIndent}() =>");
+        builder.AppendLine($"{argIndent}{{");
+
+        if (index == interceptors.Length - 1)
+        {
+            EmitSyncInnermostBody(builder, method, innerCallExpression, layerDepth + 2);
+            builder.AppendLine($"{argIndent}}});");
+            return;
+        }
+
+        EmitSyncLayerChainRecursive(
+            builder,
+            executor,
+            method,
+            interceptors,
+            innerCallExpression,
+            index + 1,
+            layerDepth + 2);
+        builder.AppendLine($"{GetIndent(layerDepth + 2)}return global::System.Threading.Tasks.Task.FromResult<object?>(invocation.ReturnValue);");
+        builder.AppendLine($"{argIndent}}});");
+    }
+
+    private static void EmitSyncInnermostBody(
+        StringBuilder builder,
+        MethodModel method,
+        string innerCallExpression,
+        int depth)
+    {
+        var indent = GetIndent(depth);
+        var taskFromResult = "global::System.Threading.Tasks.Task.FromResult<object?>";
+
+        if (method.ReturnType == "void")
+        {
+            builder.AppendLine($"{indent}{innerCallExpression};");
+            builder.AppendLine($"{indent}return {taskFromResult}(null);");
+            return;
+        }
+
+        builder.AppendLine($"{indent}invocation.ReturnValue = {innerCallExpression};");
+        builder.AppendLine($"{indent}return {taskFromResult}(invocation.ReturnValue);");
+    }
+
+    private static void EmitMultilineTaskLayerChain(
+        StringBuilder builder,
+        string executor,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string innerCallExpression)
+    {
+        var layerType = IsGenericAsyncReturnType(method.ReturnType, out var taskResultType)
+            ? $"<{taskResultType}>"
+            : string.Empty;
+
+        EmitTaskLayerChainRecursive(
+            builder,
+            executor,
+            layerType,
+            interceptors,
+            innerCallExpression,
+            index: 0);
+    }
+
+    private static void EmitTaskLayerChainRecursive(
+        StringBuilder builder,
+        string executor,
+        string layerType,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string innerCallExpression,
+        int index)
+    {
+        var layerMethod = GetTaskExecutorMethod(interceptors[index], layerType);
+        if (index == 0)
+        {
+            builder.AppendLine($"{GetIndent(0)}return {executor}.{layerMethod}(");
+        }
+        else
+        {
+            builder.AppendLine($"{GetIndent(index)}() => {executor}.{layerMethod}(");
+        }
+
+        var argIndent = GetIndent(index + 1);
+
+        builder.AppendLine($"{argIndent}ref invocation,");
+        builder.AppendLine($"{argIndent}{GetTaskInterceptorExpression(interceptors[index])},");
+        if (UsesClassBridgeParameterForTask(interceptors[index]))
+        {
+            builder.AppendLine($"{argIndent}ref classBridge,");
+        }
+
+        if (index == interceptors.Length - 1)
+        {
+            builder.AppendLine($"{argIndent}() => {innerCallExpression}");
+            EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+            return;
+        }
+
+        EmitTaskLayerChainRecursive(builder, executor, layerType, interceptors, innerCallExpression, index + 1);
+        EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+    }
+
+    private static void EmitMultilineValueTaskLayerChain(
+        StringBuilder builder,
+        string executor,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string innerCallExpression)
+    {
+        var layerType = IsGenericAsyncReturnType(method.ReturnType, out var valueTaskResultType)
+            ? $"<{valueTaskResultType}>"
+            : string.Empty;
+
+        EmitValueTaskLayerChainRecursive(
+            builder,
+            executor,
+            layerType,
+            interceptors,
+            innerCallExpression,
+            index: 0);
+    }
+
+    private static void EmitValueTaskLayerChainRecursive(
+        StringBuilder builder,
+        string executor,
+        string layerType,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string innerCallExpression,
+        int index)
+    {
+        var layerMethod = GetValueTaskExecutorMethod(interceptors[index], layerType);
+        if (index == 0)
+        {
+            builder.AppendLine($"{GetIndent(0)}return {executor}.{layerMethod}(");
+        }
+        else
+        {
+            builder.AppendLine($"{GetIndent(index)}() => {executor}.{layerMethod}(");
+        }
+
+        var argIndent = GetIndent(index + 1);
+
+        builder.AppendLine($"{argIndent}ref invocation,");
+        builder.AppendLine($"{argIndent}{GetValueTaskInterceptorExpression(interceptors[index])},");
+        if (UsesClassBridgeParameterForValueTask(interceptors[index]))
+        {
+            builder.AppendLine($"{argIndent}ref classBridge,");
+        }
+
+        if (index == interceptors.Length - 1)
+        {
+            builder.AppendLine($"{argIndent}() => {innerCallExpression}");
+            EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+            return;
+        }
+
+        EmitValueTaskLayerChainRecursive(builder, executor, layerType, interceptors, innerCallExpression, index + 1);
+        EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+    }
+
+    private static bool UsesClassBridgeParameterForTask(BakedInterceptorField interceptor)
+    {
+        return interceptor.TaskLayerKind != TaskLayerKind.AllocationFreeTask;
+    }
+
+    private static string GetSyncExecutorMethod(BakedInterceptorField interceptor)
+    {
+        return interceptor.SyncLayerKind switch
+        {
+            SyncLayerKind.AllocationFreeSync => "RunSyncAllocationFreeLayer",
+            _ => "RunSyncLayer",
+        };
+    }
+
+    private static string GetSyncInterceptorExpression(BakedInterceptorField interceptor)
+    {
+        return interceptor.SyncLayerKind switch
+        {
+            SyncLayerKind.AllocationFreeSync =>
+                $"({AbpTypeNames.FullyQualified.IAbpInterceptorSync}){interceptor.FieldName}",
+            _ => interceptor.FieldName,
+        };
+    }
+
+    private static bool UsesClassBridgeParameterForValueTask(BakedInterceptorField interceptor)
+    {
+        return interceptor.ValueTaskLayerKind == ValueTaskLayerKind.ClassBridge;
+    }
+
+    private static string GetTaskExecutorMethod(BakedInterceptorField interceptor, string layerType)
+    {
+        return interceptor.TaskLayerKind switch
+        {
+            TaskLayerKind.AllocationFreeTask => $"RunTaskAllocationFreeLayer{layerType}",
+            _ => $"RunTaskViaClassBridgeLayer{layerType}",
+        };
+    }
+
+    private static string GetTaskInterceptorExpression(BakedInterceptorField interceptor)
+    {
+        return interceptor.TaskLayerKind switch
+        {
+            TaskLayerKind.AllocationFreeTask =>
+                $"({AbpTypeNames.FullyQualified.IAbpInterceptorTaskAsync}){interceptor.FieldName}",
+            _ => interceptor.FieldName,
+        };
+    }
+
+    private static string GetValueTaskExecutorMethod(BakedInterceptorField interceptor, string layerType)
+    {
+        return interceptor.ValueTaskLayerKind switch
+        {
+            ValueTaskLayerKind.AllocationFreeValueTask => $"RunValueTaskAllocationFreeLayer{layerType}",
+            ValueTaskLayerKind.AllocationFreeTaskBridge => $"RunValueTaskViaTaskStructLayer{layerType}",
+            _ => $"RunValueTaskViaClassBridgeLayer{layerType}",
+        };
+    }
+
+    private static string GetValueTaskInterceptorExpression(BakedInterceptorField interceptor)
+    {
+        return interceptor.ValueTaskLayerKind switch
+        {
+            ValueTaskLayerKind.AllocationFreeValueTask =>
+                $"({AbpTypeNames.FullyQualified.IAbpInterceptorValueTaskAsync}){interceptor.FieldName}",
+            ValueTaskLayerKind.AllocationFreeTaskBridge =>
+                $"({AbpTypeNames.FullyQualified.IAbpInterceptorTaskAsync}){interceptor.FieldName}",
+            _ => interceptor.FieldName,
+        };
+    }
+
+    private static void EmitValueTaskLayerClose(StringBuilder builder, int index, bool isRoot)
+    {
+        builder.AppendLine(isRoot ? $"{GetIndent(index)});" : $"{GetIndent(index)})");
     }
 
     private static string NormalizeTypeName(string returnType)
@@ -242,28 +506,18 @@ internal static class InterceptorEmitter
             : returnType;
     }
 
-    private static string BuildExecutorCall(MethodModel method, string interceptor, string invocation, string target)
-    {
-        if (!method.IsAsync)
-        {
-            var typeArgument = GetExecuteAsyncTypeArgument(method);
-            return $"{AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor}.ExecuteSynchronous<{typeArgument}>({interceptor}, {invocation}, {target})";
-        }
-
-        if (IsVoidAsyncReturnType(method.ReturnType))
-        {
-            return $"{AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor}.ExecuteAsynchronous({interceptor}, {invocation}, {target})";
-        }
-
-        var resultType = GetExecuteAsyncTypeArgument(method);
-        return $"{AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor}.ExecuteAsynchronous<{resultType}>({interceptor}, {invocation}, {target})";
-    }
-
-    private static bool IsVoidAsyncReturnType(string returnType)
+    private static bool IsTaskReturnType(string returnType)
     {
         var normalized = NormalizeTypeName(returnType);
         return normalized == "System.Threading.Tasks.Task"
-               || normalized == "System.Threading.Tasks.ValueTask";
+               || normalized.StartsWith("System.Threading.Tasks.Task<", StringComparison.Ordinal);
+    }
+
+    private static bool IsValueTaskReturnType(string returnType)
+    {
+        var normalized = NormalizeTypeName(returnType);
+        return normalized == "System.Threading.Tasks.ValueTask"
+               || normalized.StartsWith("System.Threading.Tasks.ValueTask<", StringComparison.Ordinal);
     }
 
     private static bool IsGenericAsyncReturnType(string returnType, out string resultType)
@@ -286,140 +540,6 @@ internal static class InterceptorEmitter
         return false;
     }
 
-    private static bool NeedsAsTaskConversion(string returnType)
-    {
-        var normalized = NormalizeTypeName(returnType);
-        return normalized == "System.Threading.Tasks.ValueTask"
-               || normalized.StartsWith("System.Threading.Tasks.ValueTask<", StringComparison.Ordinal);
-    }
-
-    private static string BuildInnerChainExpression(MethodModel method, string innerCallExpression)
-    {
-        if (method.IsAsync)
-        {
-            if (IsVoidAsyncReturnType(method.ReturnType))
-            {
-                var awaitExpression = NeedsAsTaskConversion(method.ReturnType)
-                    ? $"{innerCallExpression}.AsTask()"
-                    : innerCallExpression;
-                return $"async () => {{ await {awaitExpression}.ConfigureAwait(false); return (object?)null; }}";
-            }
-
-            if (IsGenericAsyncReturnType(method.ReturnType, out _))
-            {
-                var taskExpression = NeedsAsTaskConversion(method.ReturnType)
-                    ? $"{innerCallExpression}.AsTask()"
-                    : innerCallExpression;
-                return $"() => {taskExpression}";
-            }
-        }
-
-        if (method.ReturnType == "void")
-        {
-            return $"async () => {{ {innerCallExpression}; return (object?)null; }}";
-        }
-
-        return $"() => global::System.Threading.Tasks.Task.FromResult({innerCallExpression})";
-    }
-
-    private static string BuildNestedInterceptorChainExpression(
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors,
-        string invocationExpression,
-        string innerChainExpression)
-    {
-        var expression = innerChainExpression;
-
-        for (var index = interceptors.Length - 1; index >= 0; index--)
-        {
-            var target = ToInterceptorTarget(expression);
-            expression = BuildExecutorCall(method, interceptors[index].FieldName, invocationExpression, target);
-        }
-
-        return expression;
-    }
-
-    private static string ToInterceptorTarget(string expression)
-    {
-        return expression.TrimStart().StartsWith("() =>", StringComparison.Ordinal)
-            ? expression
-            : $"() => {expression}";
-    }
-
-    private static string GetExecuteAsyncTypeArgument(MethodModel method)
-    {
-        if (method.IsAsync)
-        {
-            if (IsGenericAsyncReturnType(method.ReturnType, out var resultType))
-            {
-                return resultType;
-            }
-
-            return "object";
-        }
-
-        if (method.ReturnType == "void")
-        {
-            return "object";
-        }
-
-        return method.ReturnType;
-    }
-
-    private static string GetTaskReturnType(MethodModel method)
-    {
-        if (method.IsAsync)
-        {
-            if (IsGenericAsyncReturnType(method.ReturnType, out var resultType))
-            {
-                return $"global::System.Threading.Tasks.Task<{resultType}>";
-            }
-
-            return "global::System.Threading.Tasks.Task";
-        }
-
-        if (method.ReturnType == "void")
-        {
-            return "global::System.Threading.Tasks.Task";
-        }
-
-        return $"global::System.Threading.Tasks.Task<{method.ReturnType}>";
-    }
-
-    private static void EmitDirectReturn(StringBuilder builder, MethodModel method, string expression)
-    {
-        if (method.ReturnType == "void")
-        {
-            builder.AppendLine($"        {expression};");
-            return;
-        }
-
-        builder.AppendLine($"        return {expression};");
-    }
-
-    private static void EmitAwaitedReturn(StringBuilder builder, MethodModel method, string expression)
-    {
-        if (method.IsAsync)
-        {
-            if (IsVoidAsyncReturnType(method.ReturnType))
-            {
-                builder.AppendLine($"        await {expression}.ConfigureAwait(false);");
-                return;
-            }
-
-            builder.AppendLine($"        return await {expression}.ConfigureAwait(false);");
-            return;
-        }
-
-        if (method.ReturnType == "void")
-        {
-            builder.AppendLine($"        {expression}.GetAwaiter().GetResult();");
-            return;
-        }
-
-        builder.AppendLine($"        return {expression}.GetAwaiter().GetResult();");
-    }
-
     private static void EmitMethodInfoField(StringBuilder builder, ConventionTypeModel model, MethodModel method)
     {
         var methodFieldName = GetMethodFieldName(method);
@@ -434,26 +554,35 @@ internal static class InterceptorEmitter
         builder.AppendLine();
     }
 
-    private static void EmitMetadataRegistration(StringBuilder builder, MethodModel method)
+    private static void EmitMetadataField(StringBuilder builder, MethodModel method)
     {
         var aspect = method.Aspect;
         var authorize = aspect.AuthorizeAttributesExpression ?? "null";
         var features = aspect.FeatureAttributesExpression ?? "null";
         var unitOfWorkAttribute = aspect.UnitOfWorkAttributeExpression ?? "null";
-        var methodFieldName = GetMethodFieldName(method);
+        var metadataFieldName = GetMethodMetadataFieldName(method);
 
-        builder.AppendLine($"        {AbpTypeNames.FullyQualified.AbpMethodInterceptionMetadataProvider}.Instance.Register({methodFieldName}, new {AbpTypeNames.FullyQualified.AbpMethodInterceptionMetadata}");
-        builder.AppendLine("        {");
-        builder.AppendLine($"            UnitOfWorkAttribute = {unitOfWorkAttribute},");
-        builder.AppendLine($"            ApplyConventionalUnitOfWork = {aspect.ApplyConventionalUnitOfWork.ToString().ToLowerInvariant()},");
-        builder.AppendLine($"            ShouldAudit = {aspect.Audit.ToString().ToLowerInvariant()},");
-        builder.AppendLine($"            ShouldValidate = {aspect.Validate.ToString().ToLowerInvariant()},");
-        builder.AppendLine($"            AllowAnonymous = {aspect.AllowAnonymous.ToString().ToLowerInvariant()},");
-        builder.AppendLine($"            HasUseCaseAttribute = {aspect.HasUseCaseAttribute.ToString().ToLowerInvariant()},");
-        builder.AppendLine($"            UseCaseDescription = {aspect.UseCaseDescriptionExpression ?? "null"},");
-        builder.AppendLine($"            AuthorizeAttributes = {authorize},");
-        builder.AppendLine($"            FeatureAttributes = {features}");
-        builder.AppendLine("        });");
+        builder.AppendLine($"    private static readonly {AbpTypeNames.FullyQualified.AbpMethodInterceptionMetadata} {metadataFieldName} = new()");
+        builder.AppendLine("    {");
+        builder.AppendLine($"        UnitOfWorkAttribute = {unitOfWorkAttribute},");
+        builder.AppendLine($"        ApplyConventionalUnitOfWork = {aspect.ApplyConventionalUnitOfWork.ToString().ToLowerInvariant()},");
+        builder.AppendLine($"        ShouldAudit = {aspect.Audit.ToString().ToLowerInvariant()},");
+        builder.AppendLine($"        ShouldValidate = {aspect.Validate.ToString().ToLowerInvariant()},");
+        builder.AppendLine($"        AllowAnonymous = {aspect.AllowAnonymous.ToString().ToLowerInvariant()},");
+        builder.AppendLine($"        HasUseCaseAttribute = {aspect.HasUseCaseAttribute.ToString().ToLowerInvariant()},");
+        builder.AppendLine($"        UseCaseDescription = {aspect.UseCaseDescriptionExpression ?? "null"},");
+        builder.AppendLine($"        AuthorizeAttributes = {authorize},");
+        builder.AppendLine($"        FeatureAttributes = {features}");
+        builder.AppendLine("    };");
+        builder.AppendLine();
+    }
+
+    private static void EmitMetadataRegistration(StringBuilder builder, MethodModel method)
+    {
+        var methodFieldName = GetMethodFieldName(method);
+        var metadataFieldName = GetMethodMetadataFieldName(method);
+
+        builder.AppendLine($"        {AbpTypeNames.FullyQualified.AbpMethodInterceptionMetadataProvider}.Instance.Register({methodFieldName}, {metadataFieldName});");
     }
 
     private static string GetMethodFieldName(MethodModel method)
@@ -465,6 +594,25 @@ internal static class InterceptorEmitter
 
         var suffix = string.Join("_", method.Parameters.Select(SanitizeTypeNameForField));
         return $"{method.Name}_{suffix}_Method";
+    }
+
+    private static string GetMethodMetadataFieldName(MethodModel method)
+    {
+        var methodFieldName = GetMethodFieldName(method);
+        return methodFieldName.EndsWith("Method", StringComparison.Ordinal)
+            ? methodFieldName.Substring(0, methodFieldName.Length - "Method".Length) + "Metadata"
+            : methodFieldName + "Metadata";
+    }
+
+    private static string GetInvocationMethodExpression(MethodModel method)
+    {
+        var methodFieldName = GetMethodFieldName(method);
+        if (method.AbpReflection)
+        {
+            return $"new {AbpTypeNames.FullyQualified.AbpInvocationMethod}({methodFieldName}, {GetMethodMetadataFieldName(method)})";
+        }
+
+        return $"new {AbpTypeNames.FullyQualified.AbpInvocationMethod}({methodFieldName}, null)";
     }
 
     private static string SanitizeTypeNameForField(ParameterModel parameter)
@@ -495,84 +643,17 @@ internal static class InterceptorEmitter
         return $"new global::System.Type[] {{ {string.Join(", ", method.Parameters.Select(p => $"typeof({p.TypeName})"))} }}";
     }
 
-    private static string BuildInvocationBlock(ConventionTypeModel model, MethodModel method)
+    private static string GetAsyncInvocationTypeName(MethodModel method, bool isTask)
     {
-        var argumentsExpression = method.ArgumentList.Length == 0
-            ? "global::System.Array.Empty<object?>()"
-            : $"new object?[] {{ {method.ArgumentList} }}";
+        var asyncTypePrefix = isTask
+            ? "global::System.Threading.Tasks.Task"
+            : "global::System.Threading.Tasks.ValueTask";
 
-        var builder = new StringBuilder();
-        builder.AppendLine($"new {AbpTypeNames.FullyQualified.CompileTimeAbpInvocation}(");
-        builder.AppendLine("            inner,");
-        builder.AppendLine($"            {GetMethodFieldName(method)},");
-        builder.AppendLine($"            {argumentsExpression})");
-        return builder.ToString();
-    }
-
-    private static void EmitValidation(StringBuilder builder, MethodModel method)
-    {
-    }
-
-    private static void EmitUnsafeAccessor(StringBuilder builder, ConventionTypeModel model, MethodModel method, string accessorName)
-    {
-        var parameters = method.ParameterList.Length == 0
-            ? $"{model.ImplementationTypeName} @this"
-            : $"{model.ImplementationTypeName} @this, {method.ParameterList}";
-
-        builder.AppendLine($"    [global::System.Runtime.CompilerServices.UnsafeAccessor(global::System.Runtime.CompilerServices.UnsafeAccessorKind.Method, Name = {method.MethodNameExpression})]");
-        builder.AppendLine($"    private static extern {method.ReturnType} {accessorName}({parameters});");
-    }
-
-    private static string? TryGetInterceptAttribute(
-        Compilation compilation,
-        ConventionTypeModel model,
-        MethodModel method,
-        string relayBody,
-        ImmutableArray<BakedInterceptorField> serviceInterceptors)
-    {
-        try
+        if (IsGenericAsyncReturnType(method.ReturnType, out var resultType))
         {
-            var generatedNs = GeneratedNamespace.Get(compilation.AssemblyName);
-            var interceptorParameters = serviceInterceptors.IsDefaultOrEmpty
-                ? string.Empty
-                : ", " + string.Join(", ", serviceInterceptors.Select(interceptor => $"{AbpTypeNames.FullyQualified.AbpInterceptorBase} {interceptor.FieldName}"));
-
-            var relayParameters = $"{model.ImplementationTypeName} inner{interceptorParameters}"
-                                  + (method.ParameterList.Length > 0 ? ", " + method.ParameterList : string.Empty);
-
-            var relaySource = $@"#nullable enable
-namespace {generatedNs};
-file static class {model.RelayClassName}
-{{
-    public static {method.ReturnType} {method.Name}({relayParameters})
-        => {relayBody};
-}}";
-
-            var parseOptions = (compilation.SyntaxTrees.FirstOrDefault()?.Options as CSharpParseOptions) ?? new CSharpParseOptions();
-            var tree = CSharpSyntaxTree.ParseText(relaySource, parseOptions);
-            var tmpCompilation = compilation.AddSyntaxTrees(tree);
-            var semanticModel = tmpCompilation.GetSemanticModel(tree);
-            var invocation = tree.GetRoot()
-                .DescendantNodes()
-                .OfType<InvocationExpressionSyntax>()
-                .FirstOrDefault();
-
-            if (invocation == null)
-            {
-                return null;
-            }
-
-            var location = semanticModel.GetInterceptableLocation(invocation, default);
-            if (location == null)
-            {
-                return null;
-            }
-
-            return $"InterceptsLocation({location.Version}, \"{location.Data}\")";
+            return $"{AbpTypeNames.FullyQualified.AbpInvocationStruct}<{asyncTypePrefix}<{resultType}>>";
         }
-        catch
-        {
-            return null;
-        }
+
+        return $"{AbpTypeNames.FullyQualified.AbpInvocationStruct}<{asyncTypePrefix}>";
     }
 }
