@@ -136,6 +136,10 @@ nupkg/push-hikalkan.bat
 # Nuke Test Results
 output/test-results/*
 
+# BenchmarkDotNet local output (not committed)
+BenchmarkDotNet.Artifacts/
+benchmark-*-results.txt
+
 # Don't ignore the Dapper-Extensions Sql folder
 # This is needed for Dapper-Extensions to work properly
 !src/Abp.Dapper/Dapper-Extensions/Sql/
