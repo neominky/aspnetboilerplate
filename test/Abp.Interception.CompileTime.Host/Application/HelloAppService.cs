@@ -32,26 +32,49 @@ public class HelloAppService : ApplicationService, IHelloAppService
     }
 
     [DisableValidation]
-    [StructTagged("struct-sync")]
-    public string SayHelloStructTagged()
+    [StructFastPathTagged("fast-sync")]
+    public string SayHelloStructFastPath()
     {
-        return "Hello from struct-tagged sync AppService";
+        return "Hello from struct fast-path sync AppService";
     }
 
     [DisableValidation]
-    [StructTagged("struct-task")]
-    public async Task<string> SayHelloStructTaggedTaskAsync()
+    [StructFastPathTagged("fast-task")]
+    public async Task<string> SayHelloStructFastPathTaskAsync()
     {
         await Task.Yield();
-        return "Hello from struct-tagged Task AppService";
+        return "Hello from struct fast-path Task AppService";
     }
 
     [DisableValidation]
-    [StructTagged("struct-value-task")]
-    public async ValueTask<string> SayHelloStructTaggedValueTaskAsync()
+    [StructFastPathTagged("fast-value-task")]
+    public async ValueTask<string> SayHelloStructFastPathValueTaskAsync()
     {
         await Task.Yield();
-        return "Hello from struct-tagged ValueTask AppService";
+        return "Hello from struct fast-path ValueTask AppService";
+    }
+
+    [DisableValidation]
+    [StructCompatTagged("compat-sync")]
+    public string SayHelloStructCompat()
+    {
+        return "Hello from struct compat sync AppService";
+    }
+
+    [DisableValidation]
+    [StructCompatTagged("compat-task")]
+    public async Task<string> SayHelloStructCompatTaskAsync()
+    {
+        await Task.Yield();
+        return "Hello from struct compat Task AppService";
+    }
+
+    [DisableValidation]
+    [StructCompatTagged("compat-value-task")]
+    public async ValueTask<string> SayHelloStructCompatValueTaskAsync()
+    {
+        await Task.Yield();
+        return "Hello from struct compat ValueTask AppService";
     }
 
     [Audited]

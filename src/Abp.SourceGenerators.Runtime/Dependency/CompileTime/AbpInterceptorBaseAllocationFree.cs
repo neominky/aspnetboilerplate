@@ -8,6 +8,9 @@ namespace Abp.Dependency.CompileTime
     /// </summary>
     /// <remarks>
     /// Override <c>protected Internal*</c> struct methods for allocation-free compile-time interception.
+    /// <para>Sync fast path: <c>ref</c> parameter + <see cref="AbpInvocationStruct.Proceed"/> (updates <see cref="AbpInvocationStruct.ReturnValue"/> in place).</para>
+    /// <para>Async fast path: by-value struct + <c>return await invocation.Proceed()</c> (or <c>return invocation.Proceed()</c> without <c>async</c> when the interceptor has no <c>await</c>).</para>
+    /// <para><see cref="AbpInvocationStruct{TAsync}.CaptureProceedInfo"/> / <see cref="AbpStructProceedInfo{TAsync}"/> remain for porting built-in <see cref="IAbpInvocation"/> interceptors.</para>
     /// Legacy <see cref="IAbpInvocation"/> entry points adapt into stack structs and forward to those methods.
     /// </remarks>
     public abstract class AbpInterceptorBaseAllocationFree : AbpInterceptorBase,
@@ -23,34 +26,29 @@ namespace Abp.Dependency.CompileTime
             RouteSync(invocation);
         }
 
-        public virtual void InterceptAsynchronous(ref AbpInvocationStruct<Task> invocation)
+        public virtual Task<TResult> InterceptAsynchronous<TResult>(AbpInvocationStruct<Task<TResult>> invocation)
         {
-            invocation.ReturnValue = InternalInterceptAsynchronous(ref invocation);
+            return InternalInterceptAsynchronous<TResult>(invocation);
         }
 
-        public virtual void InterceptAsynchronous<TResult>(ref AbpInvocationStruct<Task<TResult>> invocation)
+        public virtual ValueTask<TResult> InterceptAsynchronous<TResult>(AbpInvocationStruct<ValueTask<TResult>> invocation)
         {
-            invocation.ReturnValue = InternalInterceptAsynchronous<TResult>(ref invocation);
-        }
-
-        public virtual void InterceptAsynchronous(ref AbpInvocationStruct<ValueTask> invocation)
-        {
-            invocation.ReturnValue = InternalInterceptAsynchronous(ref invocation);
-        }
-
-        public virtual void InterceptAsynchronous<TResult>(ref AbpInvocationStruct<ValueTask<TResult>> invocation)
-        {
-            invocation.ReturnValue = InternalInterceptAsynchronous<TResult>(ref invocation);
+            return InternalInterceptAsynchronous<TResult>(invocation);
         }
 
         protected sealed override Task InternalInterceptAsynchronous(IAbpInvocation invocation)
         {
-            return RouteTaskVoid(invocation);
+            return RouteTask<AbpUnit>(invocation);
         }
 
         protected sealed override Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
         {
-            return RouteTaskGeneric<TResult>(invocation);
+            if (typeof(TResult) == typeof(AbpUnit))
+            {
+                return (Task<TResult>)(object)InternalInterceptAsynchronous(invocation);
+            }
+
+            return RouteTask<TResult>(invocation);
         }
 
         protected virtual void InternalInterceptSynchronous(ref AbpInvocationStruct invocation)
@@ -58,13 +56,15 @@ namespace Abp.Dependency.CompileTime
             invocation.Proceed();
         }
 
-        protected abstract Task InternalInterceptAsynchronous(ref AbpInvocationStruct<Task> invocation);
+        protected virtual Task<TResult> InternalInterceptAsynchronous<TResult>(AbpInvocationStruct<Task<TResult>> invocation)
+        {
+            return invocation.Proceed();
+        }
 
-        protected abstract Task<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<Task<TResult>> invocation);
-
-        protected abstract ValueTask InternalInterceptAsynchronous(ref AbpInvocationStruct<ValueTask> invocation);
-
-        protected abstract ValueTask<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<ValueTask<TResult>> invocation);
+        protected virtual ValueTask<TResult> InternalInterceptAsynchronous<TResult>(AbpInvocationStruct<ValueTask<TResult>> invocation)
+        {
+            return invocation.Proceed();
+        }
 
         private void RouteSync(IAbpInvocation classInvocation)
         {
@@ -80,20 +80,12 @@ namespace Abp.Dependency.CompileTime
             classInvocation.ReturnValue = invocation.ReturnValue;
         }
 
-        private Task RouteTaskVoid(IAbpInvocation classInvocation)
-        {
-            var invocation = default(AbpInvocationStruct<Task>);
-            InitializeStruct(ref invocation, classInvocation);
-            invocation.SetProceed(() => ProceedAsTask(classInvocation));
-            return InternalInterceptAsynchronous(ref invocation);
-        }
-
-        private Task<TResult> RouteTaskGeneric<TResult>(IAbpInvocation classInvocation)
+        private Task<TResult> RouteTask<TResult>(IAbpInvocation classInvocation)
         {
             var invocation = default(AbpInvocationStruct<Task<TResult>>);
             InitializeStruct(ref invocation, classInvocation);
             invocation.SetProceed(() => ProceedAsTask<TResult>(classInvocation));
-            return InternalInterceptAsynchronous<TResult>(ref invocation);
+            return InternalInterceptAsynchronous<TResult>(invocation);
         }
 
         private static void InitializeStruct(ref AbpInvocationStruct structInvocation, IAbpInvocation classInvocation)
@@ -114,18 +106,23 @@ namespace Abp.Dependency.CompileTime
                 classInvocation.Arguments);
         }
 
-        private static Task ProceedAsTask(IAbpInvocation invocation)
-        {
-            var proceedInfo = invocation.CaptureProceedInfo();
-            proceedInfo.Invoke();
-            return (Task)AbpInvocationReturnValueMaterializer.MaterializeForTaskCompatibility(invocation)!;
-        }
-
         private static Task<TResult> ProceedAsTask<TResult>(IAbpInvocation invocation)
         {
             var proceedInfo = invocation.CaptureProceedInfo();
             proceedInfo.Invoke();
-            return (Task<TResult>)AbpInvocationReturnValueMaterializer.MaterializeForTaskCompatibility(invocation)!;
+
+            if (invocation.ReturnValue is Task<TResult> typedTask)
+            {
+                return typedTask;
+            }
+
+            if (typeof(TResult) == typeof(AbpUnit) && invocation.ReturnValue is Task voidTask)
+            {
+                return (Task<TResult>)(object)AbpAsyncCoercion.FromVoidTask(voidTask);
+            }
+
+            throw new AbpException(
+                $"ReturnValue must be Task<{typeof(TResult).FullName}> or Task, but was: {invocation.ReturnValue?.GetType().FullName ?? "null"}.");
         }
     }
 }

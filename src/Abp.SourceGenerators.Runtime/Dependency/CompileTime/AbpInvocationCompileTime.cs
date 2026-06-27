@@ -60,48 +60,6 @@ namespace Abp.Dependency.CompileTime
         public MethodInfo GetConcreteMethod() => _method;
 
         public object? GetValueTaskReturnForCompatibility() => ValueTaskReturnValue;
-
-        public static AbpInvocationCompileTime EnsureClassBridge(
-            ref AbpInvocationStruct structInvocation,
-            Func<Task<object?>> proceed)
-        {
-            var bridge = new AbpInvocationCompileTime(
-                structInvocation.InvocationTarget,
-                structInvocation.Method,
-                structInvocation.Arguments);
-
-            bridge.ReturnValue = structInvocation.ReturnValue;
-            bridge.SetProceed(proceed);
-            return bridge;
-        }
-
-        public static AbpInvocationCompileTime EnsureClassBridge(
-            ref AbpInvocationStruct<ValueTask> structInvocation,
-            ref AbpInvocationCompileTime? classBridge)
-        {
-            classBridge ??= new AbpInvocationCompileTime(
-                structInvocation.InvocationTarget,
-                structInvocation.Method,
-                structInvocation.Arguments,
-                wrapMethodWithMetadata: false);
-
-            classBridge.ValueTaskReturnValue = structInvocation.ReturnValue;
-            return classBridge;
-        }
-
-        public static AbpInvocationCompileTime EnsureClassBridge(
-            ref AbpInvocationStruct<Task> structInvocation,
-            ref AbpInvocationCompileTime? classBridge)
-        {
-            classBridge ??= new AbpInvocationCompileTime(
-                structInvocation.InvocationTarget,
-                structInvocation.Method,
-                structInvocation.Arguments,
-                wrapMethodWithMetadata: false);
-
-            classBridge.ReturnValue = structInvocation.ReturnValue;
-            return classBridge;
-        }
     }
 
     public sealed class AbpInvocationCompileTime<TResult> : AbpInvocationCompileTime,

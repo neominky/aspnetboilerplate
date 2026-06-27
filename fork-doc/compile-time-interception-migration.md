@@ -96,8 +96,8 @@ Castle reflection and compile-time metadata share the same runtime APIs. **Class
 |:-----|:-------|:------|
 | Invocation | `Castle.DynamicProxy.IInvocation` | `IAbpInvocation` (`Abp.Dependency`) |
 | Method in interceptors | `invocation.Method` | `invocation.MethodInvocationTarget` (may be `AbpMethodInfo` when metadata exists) |
-| Async proceed | Castle `Proceed()` | `invocation.CaptureProceedInfo().Invoke()` then await `invocation.ReturnValue` as `Task` / `Task<T>` |
-| Interceptor base | `AbpInterceptorBase` | Same; overrides use `IAbpInvocation` |
+| Async proceed | Castle `Proceed()` | **Class-bridge:** `invocation.CaptureProceedInfo().Invoke()` then await `invocation.ReturnValue` as `Task` / `Task<T>`. **Allocation-free fast path:** `return await invocation.Proceed()` (struct by value). **Allocation-free compat:** `CaptureProceedInfo()` → work → `proceedInfo.Invoke()` (optional; same as `Proceed()` when delegate unchanged). |
+| Interceptor base | `AbpInterceptorBase` | Same; class-bridge overrides use `IAbpInvocation`. Allocation-free: `AbpInterceptorBaseAllocationFree` + `protected Internal*` on `AbpInvocationStruct` |
 | Built-in aspect metadata | Read from `MethodInfo` at runtime (reflection) | Compile-time path: baked in `AbpMethodInterceptionMetadata`, looked up via `AbpMethodInfo.TryGetMetadata(method, out metadata)` |
 | Helper registration | `ITransientDependency` convention | Same; Castle registrars register interceptor **proxies** only, not helpers |
 
@@ -207,7 +207,7 @@ User interceptors are routed per method layer:
 | Return shape | Class-bridge (`AbpInterceptorBase`) | Allocation-free (`AbpInterceptorBaseAllocationFree`) |
 |:-------------|:------------------------------------|:-----------------------------------------------------|
 | sync | `RunSyncLayer` → `InterceptSynchronous(IAbpInvocation)` | `RunSyncAllocationFreeLayer` → `IAbpInterceptorSync` → `protected InternalInterceptSynchronous(ref AbpInvocationStruct)` |
-| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → `protected InternalInterceptAsynchronous(ref AbpInvocationStruct<Task[...]>)` |
+| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → `protected InternalInterceptAsynchronous<TResult>(AbpInvocationStruct<Task<TResult>>)` (by value) |
 | `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` (Task-compatible bridge) | `RunValueTaskAllocationFreeLayer`, or `RunValueTaskViaTaskStructLayer` when only Task struct `Internal*` is overridden |
 
 `AbpInvocationCompileTimeAsyncBridge` connects struct layers to class-bridge interceptors when built-in and user interceptors are mixed in one chain. For allocation-free interceptors it calls `IAbpInterceptorSync` / `IAbpInterceptorTaskAsync` / `IAbpInterceptorValueTaskAsync` directly (no `IAbpInvocation` on the compile-time path).
@@ -232,23 +232,51 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
 
 `ValueTask` returning application methods still enter the same `InternalInterceptAsynchronous` / `InternalInterceptAsynchronous<TResult>` overrides; the executor materializes `ValueTask` to `Task` at the bridge when needed.
 
-**Allocation-free** (optional; fewer heap allocations on the user interceptor layer). Inherit `AbpInterceptorBaseAllocationFree` and override `protected Internal*` struct methods only — do **not** override public `InterceptSynchronous(ref …)` / `InterceptAsynchronous(ref …)`. See `test/Abp.Interception.CompileTime.Host/Interceptors/StructTaggedCompileTimeInterceptor.cs`:
+**Allocation-free** (optional; fewer heap allocations on the user interceptor layer). Inherit `AbpInterceptorBaseAllocationFree` and override `protected Internal*` struct methods only — do **not** override public `InterceptSynchronous` / `InterceptAsynchronous` on the struct interfaces. See:
+
+- **Fast path (preferred):** [`StructFastPathCompileTimeInterceptor.cs`](../test/Abp.Interception.CompileTime.Host/Interceptors/StructFastPathCompileTimeInterceptor.cs) — sync `ref` + `Proceed()`, async `return await invocation.Proceed()`.
+- **Built-in porting (compatibility):** [`StructCompatCompileTimeInterceptor.cs`](../test/Abp.Interception.CompileTime.Host/Interceptors/StructCompatCompileTimeInterceptor.cs) — async `CaptureProceedInfo()` before work, then `proceedInfo.Invoke()` (same shape as `IAbpInvocation` interceptors).
 
 ```csharp
-[AbpInterceptor(typeof(StructTaggedAttribute))]
-public sealed class StructTaggedCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
+// Fast path
+[AbpInterceptor(typeof(StructFastPathTaggedAttribute))]
+public sealed class StructFastPathCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
 {
-    protected override void InternalInterceptSynchronous(ref AbpInvocationStruct invocation) { /* ... */ }
+    protected override void InternalInterceptSynchronous(ref AbpInvocationStruct invocation)
+    {
+        /* pre-work */ invocation.Proceed();
+    }
 
-    protected override Task InternalInterceptAsynchronous(ref AbpInvocationStruct<Task> invocation) { /* ... */ }
+    protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(
+        AbpInvocationStruct<Task<TResult>> invocation)
+    {
+        /* pre-work */ return await invocation.Proceed().ConfigureAwait(false);
+    }
 
-    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<Task<TResult>> invocation) { /* ... */ }
+    protected override async ValueTask<TResult> InternalInterceptAsynchronous<TResult>(
+        AbpInvocationStruct<ValueTask<TResult>> invocation)
+    {
+        /* pre-work */ return await invocation.Proceed().ConfigureAwait(false);
+    }
+}
 
-    protected override ValueTask InternalInterceptAsynchronous(ref AbpInvocationStruct<ValueTask> invocation) { /* ... */ }
-
-    protected override ValueTask<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<ValueTask<TResult>> invocation) { /* ... */ }
+// IAbpInvocation compatibility (porting existing async interceptors)
+[AbpInterceptor(typeof(StructCompatTaggedAttribute))]
+public sealed class StructCompatCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
+{
+    protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(
+        AbpInvocationStruct<Task<TResult>> invocation)
+    {
+        var proceedInfo = invocation.CaptureProceedInfo();
+        /* pre-work (may await) */
+        return await proceedInfo.Invoke().ConfigureAwait(false);
+    }
 }
 ```
+
+Sync uses `ref AbpInvocationStruct` so `ReturnValue` is updated in place. Async struct parameters are **by value** (shared proceed delegate; supports `async override`). Void `Task` / `ValueTask` methods use `AbpUnit` as the async result type internally (`AbpAsyncCoercion` in the emitter).
+
+`CaptureProceedInfo()` on `AbpInvocationStruct<TAsync>` is optional — functionally equivalent to `Proceed()` when the proceed delegate is unchanged; keep it when translating `IAbpInvocation` interceptors line-for-line.
 
 `AbpInterceptorBaseAllocationFree` also implements Castle / legacy `IAbpInvocation` entry points by adapting into stack structs and forwarding to the same `protected Internal*` methods.
 
@@ -285,7 +313,7 @@ Run [`test/Abp.Interception.CompileTime.Tests`](../test/Abp.Interception.Compile
 | Test class | What it checks |
 |:-----------|:---------------|
 | `TaggedCompileTimeInterceptorWebTests` | User interceptor via class-bridge (`AbpInterceptorBase` + `IAbpInvocation`) |
-| `StructAllocationFreeInterceptorWebTests` | User interceptor via allocation-free struct path (`AbpInterceptorBaseAllocationFree`) |
+| `StructAllocationFreeInterceptorWebTests` | Allocation-free struct path: `StructFastPathCompileTimeInterceptor` (fast `Proceed`) and `StructCompatCompileTimeInterceptor` (`CaptureProceedInfo` compat) |
 | `BuiltInInterceptorWebTests` | Built-in auditing with user interceptors in the same chain |
 
 With `EmitCompilerGeneratedFiles` on the host project, generated sources appear under `obj/Generated/Abp.SourceGenerators/`.

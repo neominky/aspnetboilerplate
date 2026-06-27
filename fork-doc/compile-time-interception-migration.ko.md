@@ -96,8 +96,8 @@ Castle 리플렉션과 compile-time 메타데이터가 동일한 런타임 API�
 |:-----|:-----|:-----|
 | Invocation | `Castle.DynamicProxy.IInvocation` | `IAbpInvocation` (`Abp.Dependency`) |
 | 인터셉터의 메서드 | `invocation.Method` | `invocation.MethodInvocationTarget` (메타데이터가 있으면 `AbpMethodInfo`일 수 있음) |
-| 비동기 proceed | Castle `Proceed()` | `invocation.CaptureProceedInfo().Invoke()` 후 `invocation.ReturnValue`를 `Task` / `Task<T>`로 await |
-| 인터셉터 베이스 | `AbpInterceptorBase` | 동일; override는 `IAbpInvocation` 사용 |
+| 비동기 proceed | Castle `Proceed()` | **class-bridge:** `invocation.CaptureProceedInfo().Invoke()` 후 `invocation.ReturnValue`를 `Task` / `Task<T>`로 await. **allocation-free fast path:** `return await invocation.Proceed()` (struct by value). **allocation-free 호환:** `CaptureProceedInfo()` → 작업 → `proceedInfo.Invoke()` (선택; delegate가 같으면 `Proceed()`와 동일). |
+| 인터셉터 베이스 | `AbpInterceptorBase` | 동일; class-bridge override는 `IAbpInvocation`. allocation-free: `AbpInterceptorBaseAllocationFree` + `AbpInvocationStruct`의 `protected Internal*` |
 | 내장 aspect 메타데이터 | 런타임 `MethodInfo` 리플렉션 | compile-time: `AbpMethodInterceptionMetadata`로 bake, `AbpMethodInfo.TryGetMetadata(method, out metadata)`로 조회 |
 | 헬퍼 등록 | `ITransientDependency` convention | 동일; Castle registrar는 인터셉터 **프록시**만 등록 |
 
@@ -203,7 +203,7 @@ Validation → Auditing → EntityHistory → UnitOfWork → Authorization → �
 | 반환 형태 | class-bridge (`AbpInterceptorBase`) | allocation-free (`AbpInterceptorBaseAllocationFree`) |
 |:----------|:-----------------------------------|:-------------------------------------------------------|
 | sync | `RunSyncLayer` → `InterceptSynchronous(IAbpInvocation)` | `RunSyncAllocationFreeLayer` → `IAbpInterceptorSync` → `protected InternalInterceptSynchronous(ref AbpInvocationStruct)` |
-| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → struct `Internal*` |
+| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → `protected InternalInterceptAsynchronous<TResult>(AbpInvocationStruct<Task<TResult>>)` (by value) |
 | `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` (Task 호환 브리지) | `RunValueTaskAllocationFreeLayer`, 또는 Task struct `Internal*`만 있을 때 `RunValueTaskViaTaskStructLayer` |
 
 `AbpInvocationCompileTimeAsyncBridge`는 내장·사용자 인터셉터가 한 체인에 섞일 때 struct 레이어와 class-bridge 인터셉터를 연결합니다. allocation-free 인터셉터에는 compile-time 경로에서 `IAbpInterceptorSync` / `IAbpInterceptorTaskAsync` / `IAbpInterceptorValueTaskAsync`를 직접 호출합니다 (`IAbpInvocation` 미사용).
@@ -228,23 +228,45 @@ public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransien
 
 `ValueTask` 반환 애플리케이션 메서드도 동일한 `InternalInterceptAsynchronous` / `InternalInterceptAsynchronous<TResult>`로 진입하며, 필요 시 executor가 브리지에서 `ValueTask`를 `Task`로 materialize합니다.
 
-**allocation-free** (선택; 사용자 인터셉터 레이어에서 heap 할당 감소). `AbpInterceptorBaseAllocationFree`를 상속하고 `protected Internal*` struct 메서드만 override합니다. public `InterceptSynchronous(ref …)` / `InterceptAsynchronous(ref …)`는 override하지 않습니다. `test/Abp.Interception.CompileTime.Host/Interceptors/StructTaggedCompileTimeInterceptor.cs` 참고:
+**allocation-free** (선택; 사용자 인터셉터 레이어에서 heap 할당 감소). `AbpInterceptorBaseAllocationFree`를 상속하고 `protected Internal*` struct 메서드만 override합니다. public `InterceptSynchronous` / `InterceptAsynchronous` struct 인터페이스 메서드는 override하지 않습니다. 참고:
+
+- **fast path (권장):** [`StructFastPathCompileTimeInterceptor.cs`](../test/Abp.Interception.CompileTime.Host/Interceptors/StructFastPathCompileTimeInterceptor.cs) — sync `ref` + `Proceed()`, async `return await invocation.Proceed()`.
+- **기존 코드 호환:** [`StructCompatCompileTimeInterceptor.cs`](../test/Abp.Interception.CompileTime.Host/Interceptors/StructCompatCompileTimeInterceptor.cs) — async `CaptureProceedInfo()` → 선행 작업 → `proceedInfo.Invoke()` (`IAbpInvocation` 인터셉터와 동일 형태).
 
 ```csharp
-[AbpInterceptor(typeof(StructTaggedAttribute))]
-public sealed class StructTaggedCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
+// fast path
+[AbpInterceptor(typeof(StructFastPathTaggedAttribute))]
+public sealed class StructFastPathCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
 {
-    protected override void InternalInterceptSynchronous(ref AbpInvocationStruct invocation) { /* ... */ }
+    protected override void InternalInterceptSynchronous(ref AbpInvocationStruct invocation)
+    {
+        /* 선행 작업 */ invocation.Proceed();
+    }
 
-    protected override Task InternalInterceptAsynchronous(ref AbpInvocationStruct<Task> invocation) { /* ... */ }
+    protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(
+        AbpInvocationStruct<Task<TResult>> invocation)
+    {
+        /* 선행 작업 */ return await invocation.Proceed().ConfigureAwait(false);
+    }
+}
 
-    protected override Task<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<Task<TResult>> invocation) { /* ... */ }
-
-    protected override ValueTask InternalInterceptAsynchronous(ref AbpInvocationStruct<ValueTask> invocation) { /* ... */ }
-
-    protected override ValueTask<TResult> InternalInterceptAsynchronous<TResult>(ref AbpInvocationStruct<ValueTask<TResult>> invocation) { /* ... */ }
+// IAbpInvocation 호환 (기존 async 인터셉터 포팅)
+[AbpInterceptor(typeof(StructCompatTaggedAttribute))]
+public sealed class StructCompatCompileTimeInterceptor : AbpInterceptorBaseAllocationFree, ITransientDependency
+{
+    protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(
+        AbpInvocationStruct<Task<TResult>> invocation)
+    {
+        var proceedInfo = invocation.CaptureProceedInfo();
+        /* 선행 작업 (await 가능) */
+        return await proceedInfo.Invoke().ConfigureAwait(false);
+    }
 }
 ```
+
+동기는 `ref AbpInvocationStruct`로 `ReturnValue`를 제자리에서 갱신합니다. async struct 파라미터는 **by value** (proceed delegate 공유, `async override` 지원). void `Task` / `ValueTask` 메서드는 내부적으로 `AbpUnit` 결과 타입을 사용합니다 (emitter의 `AbpAsyncCoercion`).
+
+`AbpInvocationStruct<TAsync>.CaptureProceedInfo()`는 선택 사항 — proceed delegate가 바뀌지 않으면 `Proceed()`와 동일합니다. `IAbpInvocation` 인터셉터를 줄 단위로 옮길 때만 사용합니다.
 
 `AbpInterceptorBaseAllocationFree`는 Castle / legacy `IAbpInvocation` 진입점도 스택 struct로 어댑트한 뒤 동일한 `protected Internal*`로 전달합니다.
 
@@ -277,7 +299,7 @@ public class MyAppService : ApplicationService { /* ... */ }
 | 테스트 클래스 | 검증 내용 |
 |:--------------|:----------|
 | `TaggedCompileTimeInterceptorWebTests` | class-bridge 사용자 인터셉터 (`AbpInterceptorBase` + `IAbpInvocation`) |
-| `StructAllocationFreeInterceptorWebTests` | allocation-free struct 경로 (`AbpInterceptorBaseAllocationFree`) |
+| `StructAllocationFreeInterceptorWebTests` | allocation-free struct: `StructFastPathCompileTimeInterceptor` (fast `Proceed`) 및 `StructCompatCompileTimeInterceptor` (`CaptureProceedInfo` 호환) |
 | `BuiltInInterceptorWebTests` | 내장 auditing과 사용자 인터셉터가 같은 체인에서 동작 |
 
 호스트 프로젝트에 `EmitCompilerGeneratedFiles`가 켜져 있으면 생성 코드는 `obj/Generated/Abp.SourceGenerators/`에서 볼 수 있습니다.

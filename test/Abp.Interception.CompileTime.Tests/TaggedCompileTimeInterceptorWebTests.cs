@@ -21,7 +21,8 @@ public class TaggedCompileTimeInterceptorWebTests
     public async Task Api_hello_should_invoke_user_defined_interceptor_and_apply_tag()
     {
         TaggedCompileTimeInterceptor.ResetForTest();
-        StructTaggedCompileTimeInterceptor.ResetForTest();
+        StructFastPathCompileTimeInterceptor.ResetForTest();
+        StructCompatCompileTimeInterceptor.ResetForTest();
 
         var client = _factory.CreateClient();
         var response = await client.GetStringAsync("/api/hello");
@@ -36,7 +37,8 @@ public class TaggedCompileTimeInterceptorWebTests
     public async Task Api_hello_task_should_invoke_user_defined_interceptor_via_class_bridge_and_apply_tag()
     {
         TaggedCompileTimeInterceptor.ResetForTest();
-        StructTaggedCompileTimeInterceptor.ResetForTest();
+        StructFastPathCompileTimeInterceptor.ResetForTest();
+        StructCompatCompileTimeInterceptor.ResetForTest();
 
         var client = _factory.CreateClient();
         var response = await client.GetStringAsync("/api/hello-task");
@@ -51,7 +53,8 @@ public class TaggedCompileTimeInterceptorWebTests
     public async Task Api_hello_value_task_should_invoke_user_defined_interceptor_via_class_bridge_and_apply_tag()
     {
         TaggedCompileTimeInterceptor.ResetForTest();
-        StructTaggedCompileTimeInterceptor.ResetForTest();
+        StructFastPathCompileTimeInterceptor.ResetForTest();
+        StructCompatCompileTimeInterceptor.ResetForTest();
 
         var client = _factory.CreateClient();
         var response = await client.GetStringAsync("/api/hello-value-task");
@@ -66,7 +69,8 @@ public class TaggedCompileTimeInterceptorWebTests
     public async Task Api_hello_audited_tagged_should_apply_builtin_auditing_and_custom_tag()
     {
         TaggedCompileTimeInterceptor.ResetForTest();
-        StructTaggedCompileTimeInterceptor.ResetForTest();
+        StructFastPathCompileTimeInterceptor.ResetForTest();
+        StructCompatCompileTimeInterceptor.ResetForTest();
         TestAuditingStore.ResetForTest();
 
         var client = _factory.CreateClient();

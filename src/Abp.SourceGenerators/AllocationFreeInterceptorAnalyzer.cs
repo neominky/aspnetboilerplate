@@ -42,24 +42,20 @@ internal static class AllocationFreeInterceptorAnalyzer
         }
 
         var invocationStruct = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.AbpInvocationStructOpen);
-        var valueTask = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.ValueTask);
         var valueTaskGeneric = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.ValueTaskOpen);
-        var task = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.Task);
         var taskGeneric = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.TaskOpen);
 
-        if (invocationStruct == null || valueTask == null || valueTaskGeneric == null || task == null || taskGeneric == null)
+        if (invocationStruct == null || valueTaskGeneric == null || taskGeneric == null)
         {
             return ValueTaskLayerKind.ClassBridge;
         }
 
-        if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, valueTask, isGeneric: false)
-            || OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, valueTaskGeneric, isGeneric: true))
+        if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, valueTaskGeneric))
         {
             return ValueTaskLayerKind.AllocationFreeValueTask;
         }
 
-        if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, task, isGeneric: false)
-            || OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, taskGeneric, isGeneric: true))
+        if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, taskGeneric))
         {
             return ValueTaskLayerKind.AllocationFreeTaskBridge;
         }
@@ -78,16 +74,14 @@ internal static class AllocationFreeInterceptorAnalyzer
         }
 
         var invocationStruct = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.AbpInvocationStructOpen);
-        var task = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.Task);
         var taskGeneric = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.TaskOpen);
 
-        if (invocationStruct == null || task == null || taskGeneric == null)
+        if (invocationStruct == null || taskGeneric == null)
         {
             return TaskLayerKind.ClassBridge;
         }
 
-        if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, task, isGeneric: false)
-            || OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, taskGeneric, isGeneric: true))
+        if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, taskGeneric))
         {
             return TaskLayerKind.AllocationFreeTask;
         }
@@ -150,18 +144,16 @@ internal static class AllocationFreeInterceptorAnalyzer
         INamedTypeSymbol interceptorType,
         INamedTypeSymbol allocationFreeBase,
         INamedTypeSymbol invocationStructOpen,
-        INamedTypeSymbol asyncType,
-        bool isGeneric)
+        INamedTypeSymbol asyncTypeOpen)
     {
-        return OverridesStructInterceptMethod(interceptorType, allocationFreeBase, invocationStructOpen, asyncType, isGeneric);
+        return OverridesStructInterceptMethod(interceptorType, allocationFreeBase, invocationStructOpen, asyncTypeOpen);
     }
 
     private static bool OverridesStructInterceptMethod(
         INamedTypeSymbol interceptorType,
         INamedTypeSymbol allocationFreeBase,
         INamedTypeSymbol invocationStructOpen,
-        INamedTypeSymbol asyncType,
-        bool isGeneric)
+        INamedTypeSymbol asyncTypeOpen)
     {
         foreach (var member in interceptorType.GetMembers("InternalInterceptAsynchronous"))
         {
@@ -170,19 +162,12 @@ internal static class AllocationFreeInterceptorAnalyzer
                 continue;
             }
 
-            if (isGeneric)
-            {
-                if (method.TypeParameters.Length != 1 || method.Parameters.Length != 1)
-                {
-                    continue;
-                }
-            }
-            else if (method.TypeParameters.Length != 0 || method.Parameters.Length != 1)
+            if (method.TypeParameters.Length != 1 || method.Parameters.Length != 1)
             {
                 continue;
             }
 
-            if (method.Parameters[0].RefKind != RefKind.Ref)
+            if (method.Parameters[0].RefKind != RefKind.None)
             {
                 continue;
             }
@@ -194,15 +179,8 @@ internal static class AllocationFreeInterceptorAnalyzer
             }
 
             var asyncArgument = parameterType.TypeArguments[0];
-            if (isGeneric)
-            {
-                if (asyncArgument is not INamedTypeSymbol genericAsyncArgument
-                    || !SymbolEqualityComparer.Default.Equals(genericAsyncArgument.OriginalDefinition, asyncType))
-                {
-                    continue;
-                }
-            }
-            else if (!SymbolEqualityComparer.Default.Equals(asyncArgument, asyncType))
+            if (asyncArgument is not INamedTypeSymbol genericAsyncArgument
+                || !SymbolEqualityComparer.Default.Equals(genericAsyncArgument.OriginalDefinition, asyncTypeOpen))
             {
                 continue;
             }

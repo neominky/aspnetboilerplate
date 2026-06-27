@@ -6,142 +6,75 @@ namespace Abp.Dependency.CompileTime
     /// <summary>
     /// Adapts stack-based struct invocations to class-based <see cref="AbpInterceptorBase"/> async interception.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Compile-time interception runs async methods through <see cref="AbpInvocationStruct{TAsync}"/> (allocation-free).
-    /// Built-in and user interceptors, however, still implement
-    /// <see cref="AbpInterceptorBase.InternalInterceptAsynchronous(IAbpInvocation)"/> on heap
-    /// <see cref="AbpInvocationCompileTime"/> instances.
-    /// </para>
-    /// <para>
-    /// This bridge is invoked by
-    /// <see cref="CompileTimeInvocationInterceptorExecutor.RunTaskViaClassBridgeLayer"/> and
-    /// <see cref="CompileTimeInvocationInterceptorExecutor.RunValueTaskViaClassBridgeLayer"/> when a layer must
-    /// call <see cref="AbpInterceptorBase"/> instead of struct <c>InterceptAsynchronous</c> overloads.
-    /// It wires struct <c>Proceed</c> into the class bridge, runs the interceptor, then copies the result back
-    /// into <c>invocation.ReturnValue</c>.
-    /// </para>
-    /// <para>
-    /// For <see cref="ValueTask"/> layers, proceed results are materialized to <see cref="Task"/> via
-    /// <see cref="AbpInvocationReturnValueMaterializer"/> and exposed through
-    /// <see cref="AbpInvocationCompileTimeTaskCompatible"/> so existing Task-based interceptors can run without
-    /// invalid <see cref="ValueTask"/> casts. The Task is stored on <see cref="AbpInvocationCompileTime.ReturnValue"/>
-    /// so later interceptors can await it again; <see cref="ValueTask"/> must not be awaited and then re-read.
-    /// </para>
-    /// </remarks>
     internal static class AbpInvocationCompileTimeAsyncBridge
     {
-        public static void InterceptTaskVoid(
-            ref AbpInvocationStruct<Task> invocation,
+        public static Task<TResult> InterceptTask<TResult>(
+            ref AbpInvocationStruct<Task<TResult>> invocation,
             AbpInterceptorBase interceptor,
-            ref AbpInvocationCompileTime? classBridge)
+            ref AbpInvocationCompileTime<TResult>? classBridge)
         {
             if (interceptor is IAbpInterceptorTaskAsync taskAsync)
             {
-                taskAsync.InterceptAsynchronous(ref invocation);
-                return;
+                return taskAsync.InterceptAsynchronous<TResult>(invocation);
             }
 
-            var bridge = AbpInvocationCompileTime.EnsureClassBridge(ref invocation, ref classBridge);
-            ConfigureVoidTaskBridgeProceed(invocation, bridge);
-            interceptor.InterceptAsynchronous(bridge);
-            invocation.ReturnValue = ResolveVoidTaskReturn(bridge);
-        }
+            var bridge = AbpInvocationCompileTime<TResult>.EnsureClassBridge(ref invocation, ref classBridge);
+            ConfigureTaskBridgeProceed(invocation, bridge);
 
-        public static void InterceptTaskGeneric<T>(
-            ref AbpInvocationStruct<Task<T>> invocation,
-            AbpInterceptorBase interceptor,
-            ref AbpInvocationCompileTime<T>? classBridge)
-        {
-            if (interceptor is IAbpInterceptorTaskAsync taskAsync)
+            if (typeof(TResult) == typeof(AbpUnit))
             {
-                taskAsync.InterceptAsynchronous(ref invocation);
-                return;
+                interceptor.InterceptAsynchronous(bridge);
+            }
+            else
+            {
+                interceptor.InterceptAsynchronous<TResult>(bridge);
             }
 
-            var bridge = AbpInvocationCompileTime<T>.EnsureClassBridge(ref invocation, ref classBridge);
-            ConfigureGenericTaskBridgeProceed(invocation, bridge);
-            interceptor.InterceptAsynchronous<T>(bridge);
-            invocation.ReturnValue = ResolveGenericTaskReturn(bridge);
+            return ResolveTaskReturn(bridge);
         }
 
-        public static void InterceptValueTaskVoid(
-            ref AbpInvocationStruct<ValueTask> invocation,
+        public static ValueTask<TResult> InterceptValueTask<TResult>(
+            ref AbpInvocationStruct<ValueTask<TResult>> invocation,
             AbpInterceptorBase interceptor,
-            ref AbpInvocationCompileTime? classBridge)
+            ref AbpInvocationCompileTime<TResult>? classBridge)
         {
             if (interceptor is IAbpInterceptorValueTaskAsync valueTaskAsync)
             {
-                valueTaskAsync.InterceptAsynchronous(ref invocation);
-                return;
+                return valueTaskAsync.InterceptAsynchronous<TResult>(invocation);
             }
 
-            var bridge = AbpInvocationCompileTime.EnsureClassBridge(ref invocation, ref classBridge);
-            ConfigureVoidValueTaskBridgeProceed(invocation, bridge);
-            interceptor.InterceptAsynchronous(new AbpInvocationCompileTimeTaskCompatible(bridge));
-            invocation.ReturnValue = ResolveVoidValueTaskReturn(bridge);
-        }
+            var bridge = AbpInvocationCompileTime<TResult>.EnsureClassBridge(ref invocation, ref classBridge);
+            ConfigureValueTaskBridgeProceed(invocation, bridge);
+            var compatibleBridge = new AbpInvocationCompileTimeTaskCompatible(bridge);
 
-        public static void InterceptValueTaskGeneric<T>(
-            ref AbpInvocationStruct<ValueTask<T>> invocation,
-            AbpInterceptorBase interceptor,
-            ref AbpInvocationCompileTime<T>? classBridge)
-        {
-            if (interceptor is IAbpInterceptorValueTaskAsync valueTaskAsync)
+            if (typeof(TResult) == typeof(AbpUnit))
             {
-                valueTaskAsync.InterceptAsynchronous(ref invocation);
-                return;
+                interceptor.InterceptAsynchronous(compatibleBridge);
+            }
+            else
+            {
+                interceptor.InterceptAsynchronous<TResult>(compatibleBridge);
             }
 
-            var bridge = AbpInvocationCompileTime<T>.EnsureClassBridge(ref invocation, ref classBridge);
-            ConfigureGenericValueTaskBridgeProceed(invocation, bridge);
-            interceptor.InterceptAsynchronous<T>(new AbpInvocationCompileTimeTaskCompatible(bridge));
-            invocation.ReturnValue = ResolveGenericValueTaskReturn(bridge);
+            return ResolveValueTaskReturn(bridge);
         }
 
-        private static void ConfigureVoidTaskBridgeProceed(
-            AbpInvocationStruct<Task> invocation,
-            AbpInvocationCompileTime bridge)
-        {
-            bridge.SetProceed(async () =>
-            {
-                var task = invocation.Proceed();
-                bridge.ReturnValue = task;
-                await task.ConfigureAwait(false);
-                return null;
-            });
-        }
-
-        private static void ConfigureGenericTaskBridgeProceed<T>(
-            AbpInvocationStruct<Task<T>> invocation,
-            AbpInvocationCompileTime<T> bridge)
+        private static void ConfigureTaskBridgeProceed<TResult>(
+            AbpInvocationStruct<Task<TResult>> invocation,
+            AbpInvocationCompileTime<TResult> bridge)
         {
             bridge.SetProceed(async () =>
             {
                 var task = invocation.Proceed();
                 bridge.ReturnValue = task;
                 var result = await task.ConfigureAwait(false);
-                return result;
+                return (object?)result;
             });
         }
 
-        private static void ConfigureVoidValueTaskBridgeProceed(
-            AbpInvocationStruct<ValueTask> invocation,
-            AbpInvocationCompileTime bridge)
-        {
-            bridge.SetProceed(async () =>
-            {
-                var valueTask = invocation.Proceed();
-                var task = AbpInvocationReturnValueMaterializer.AsTask(valueTask);
-                bridge.ReturnValue = task;
-                await task.ConfigureAwait(false);
-                return null;
-            });
-        }
-
-        private static void ConfigureGenericValueTaskBridgeProceed<T>(
-            AbpInvocationStruct<ValueTask<T>> invocation,
-            AbpInvocationCompileTime<T> bridge)
+        private static void ConfigureValueTaskBridgeProceed<TResult>(
+            AbpInvocationStruct<ValueTask<TResult>> invocation,
+            AbpInvocationCompileTime<TResult> bridge)
         {
             bridge.SetProceed(async () =>
             {
@@ -149,51 +82,36 @@ namespace Abp.Dependency.CompileTime
                 var task = AbpInvocationReturnValueMaterializer.AsTask(valueTask);
                 bridge.ReturnValue = task;
                 var result = await task.ConfigureAwait(false);
-                return result;
+                return (object?)result;
             });
         }
 
-        private static Task ResolveVoidTaskReturn(AbpInvocationCompileTime bridge)
+        private static Task<TResult> ResolveTaskReturn<TResult>(AbpInvocationCompileTime<TResult> bridge)
         {
-            if (bridge.ReturnValue is Task task)
+            if (bridge.ReturnValue is Task<TResult> task)
             {
                 return task;
             }
 
-            return Task.CompletedTask;
-        }
-
-        private static Task<T> ResolveGenericTaskReturn<T>(AbpInvocationCompileTime<T> bridge)
-        {
-            if (bridge.ReturnValue is Task<T> task)
+            if (typeof(TResult) == typeof(AbpUnit) && bridge.ReturnValue is Task voidTask)
             {
-                return task;
+                return (Task<TResult>)(object)AbpAsyncCoercion.FromVoidTask(voidTask);
             }
 
             throw new AbpException(
-                $"ReturnValue must be Task<{typeof(T).FullName}>, but was: {bridge.ReturnValue?.GetType().FullName ?? "null"}.");
+                $"ReturnValue must be Task<{typeof(TResult).FullName}>, but was: {bridge.ReturnValue?.GetType().FullName ?? "null"}.");
         }
 
-        private static ValueTask ResolveVoidValueTaskReturn(AbpInvocationCompileTime bridge)
+        private static ValueTask<TResult> ResolveValueTaskReturn<TResult>(AbpInvocationCompileTime<TResult> bridge)
         {
-            if (bridge.ReturnValue is Task task)
+            if (bridge.ReturnValue is Task<TResult> task)
             {
-                return new ValueTask(task);
+                return new ValueTask<TResult>(task);
             }
 
-            if (bridge.ValueTaskReturnValue != default)
+            if (typeof(TResult) == typeof(AbpUnit) && bridge.ReturnValue is Task voidTask)
             {
-                return bridge.ValueTaskReturnValue;
-            }
-
-            return default;
-        }
-
-        private static ValueTask<T> ResolveGenericValueTaskReturn<T>(AbpInvocationCompileTime<T> bridge)
-        {
-            if (bridge.ReturnValue is Task<T> task)
-            {
-                return new ValueTask<T>(task);
+                return new ValueTask<TResult>((Task<TResult>)(object)AbpAsyncCoercion.FromVoidTask(voidTask));
             }
 
             if (bridge.ValueTaskReturnValue != default)

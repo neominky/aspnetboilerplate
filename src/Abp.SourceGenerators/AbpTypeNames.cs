@@ -21,6 +21,7 @@ internal static class AbpTypeNames
         public const string TaskOpen = "System.Threading.Tasks.Task`1";
         public const string ValueTask = "System.Threading.Tasks.ValueTask";
         public const string ValueTaskOpen = "System.Threading.Tasks.ValueTask`1";
+        public const string AbpUnit = "Abp.Dependency.CompileTime.AbpUnit";
         public const string ITransientDependency = "Abp.Dependency.ITransientDependency";
         public const string ISingletonDependency = "Abp.Dependency.ISingletonDependency";
         public const string IApplicationService = "Abp.Application.Services.IApplicationService";
@@ -85,6 +86,8 @@ internal static class AbpTypeNames
         public const string DisableConventionalRegistrationAttribute = "global::Abp.Dependency.CompileTime.DisableConventionalRegistration";
         public const string AbpInvocationCompileTime = "global::Abp.Dependency.CompileTime.AbpInvocationCompileTime";
         public const string AbpInvocationStruct = "global::Abp.Dependency.CompileTime.AbpInvocationStruct";
+        public const string AbpUnit = "global::Abp.Dependency.CompileTime.AbpUnit";
+        public const string AbpAsyncCoercion = "global::Abp.Dependency.CompileTime.AbpAsyncCoercion";
         public const string AbpInvocationMethod = "global::Abp.Dependency.CompileTime.AbpInvocationMethod";
         public const string AbpMethodInterceptionMetadataProvider = "global::Abp.Dependency.AbpMethodInterceptionMetadataProvider";
         public const string AbpMethodInterceptionMetadata = "global::Abp.Dependency.AbpMethodInterceptionMetadata";

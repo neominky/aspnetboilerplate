@@ -16,47 +16,93 @@ public class StructAllocationFreeInterceptorWebTests
     }
 
     [Fact]
-    public async Task Api_hello_struct_tagged_sync_should_use_allocation_free_sync_struct_path()
+    public async Task Api_hello_struct_fast_path_sync_should_use_proceed_fast_path()
     {
-        StructTaggedCompileTimeInterceptor.ResetForTest();
-        TaggedCompileTimeInterceptor.ResetForTest();
+        ResetStructInterceptors();
 
         var client = _factory.CreateClient();
-        var response = await client.GetStringAsync("/api/hello-struct-tagged");
+        var response = await client.GetStringAsync("/api/hello-struct-fast-path");
 
-        Assert.Contains("Hello from struct-tagged sync AppService", response);
-        Assert.Contains("[struct-tag:struct-sync]", response);
-        Assert.Equal(1, StructTaggedCompileTimeInterceptor.InvocationCount);
-        Assert.Equal("struct-sync", StructTaggedCompileTimeInterceptor.LastTag);
+        Assert.Contains("Hello from struct fast-path sync AppService", response);
+        Assert.Equal(1, StructFastPathCompileTimeInterceptor.InvocationCount);
+        Assert.Equal("fast-sync", StructFastPathCompileTimeInterceptor.LastTag);
+        Assert.Equal(0, StructCompatCompileTimeInterceptor.InvocationCount);
     }
 
     [Fact]
-    public async Task Api_hello_struct_tagged_task_should_use_allocation_free_task_struct_path()
+    public async Task Api_hello_struct_fast_path_task_should_use_proceed_fast_path()
     {
-        StructTaggedCompileTimeInterceptor.ResetForTest();
-        TaggedCompileTimeInterceptor.ResetForTest();
+        ResetStructInterceptors();
 
         var client = _factory.CreateClient();
-        var response = await client.GetStringAsync("/api/hello-struct-tagged-task");
+        var response = await client.GetStringAsync("/api/hello-struct-fast-path-task");
 
-        Assert.Contains("Hello from struct-tagged Task AppService", response);
-        Assert.Contains("[struct-tag:struct-task]", response);
-        Assert.Equal(1, StructTaggedCompileTimeInterceptor.InvocationCount);
-        Assert.Equal("struct-task", StructTaggedCompileTimeInterceptor.LastTag);
+        Assert.Contains("Hello from struct fast-path Task AppService", response);
+        Assert.Equal(1, StructFastPathCompileTimeInterceptor.InvocationCount);
+        Assert.Equal("fast-task", StructFastPathCompileTimeInterceptor.LastTag);
+        Assert.Equal(0, StructCompatCompileTimeInterceptor.InvocationCount);
     }
 
     [Fact]
-    public async Task Api_hello_struct_tagged_value_task_should_use_allocation_free_value_task_struct_path()
+    public async Task Api_hello_struct_fast_path_value_task_should_use_proceed_fast_path()
     {
-        StructTaggedCompileTimeInterceptor.ResetForTest();
-        TaggedCompileTimeInterceptor.ResetForTest();
+        ResetStructInterceptors();
 
         var client = _factory.CreateClient();
-        var response = await client.GetStringAsync("/api/hello-struct-tagged-value-task");
+        var response = await client.GetStringAsync("/api/hello-struct-fast-path-value-task");
 
-        Assert.Contains("Hello from struct-tagged ValueTask AppService", response);
-        Assert.Contains("[struct-tag:struct-value-task]", response);
-        Assert.Equal(1, StructTaggedCompileTimeInterceptor.InvocationCount);
-        Assert.Equal("struct-value-task", StructTaggedCompileTimeInterceptor.LastTag);
+        Assert.Contains("Hello from struct fast-path ValueTask AppService", response);
+        Assert.Equal(1, StructFastPathCompileTimeInterceptor.InvocationCount);
+        Assert.Equal("fast-value-task", StructFastPathCompileTimeInterceptor.LastTag);
+        Assert.Equal(0, StructCompatCompileTimeInterceptor.InvocationCount);
+    }
+
+    [Fact]
+    public async Task Api_hello_struct_compat_sync_should_use_capture_proceed_info_pattern()
+    {
+        ResetStructInterceptors();
+
+        var client = _factory.CreateClient();
+        var response = await client.GetStringAsync("/api/hello-struct-compat");
+
+        Assert.Contains("Hello from struct compat sync AppService", response);
+        Assert.Equal(0, StructFastPathCompileTimeInterceptor.InvocationCount);
+        Assert.Equal(1, StructCompatCompileTimeInterceptor.InvocationCount);
+        Assert.Equal("compat-sync", StructCompatCompileTimeInterceptor.LastTag);
+    }
+
+    [Fact]
+    public async Task Api_hello_struct_compat_task_should_use_capture_proceed_info_pattern()
+    {
+        ResetStructInterceptors();
+
+        var client = _factory.CreateClient();
+        var response = await client.GetStringAsync("/api/hello-struct-compat-task");
+
+        Assert.Contains("Hello from struct compat Task AppService", response);
+        Assert.Equal(0, StructFastPathCompileTimeInterceptor.InvocationCount);
+        Assert.Equal(1, StructCompatCompileTimeInterceptor.InvocationCount);
+        Assert.Equal("compat-task", StructCompatCompileTimeInterceptor.LastTag);
+    }
+
+    [Fact]
+    public async Task Api_hello_struct_compat_value_task_should_use_capture_proceed_info_pattern()
+    {
+        ResetStructInterceptors();
+
+        var client = _factory.CreateClient();
+        var response = await client.GetStringAsync("/api/hello-struct-compat-value-task");
+
+        Assert.Contains("Hello from struct compat ValueTask AppService", response);
+        Assert.Equal(0, StructFastPathCompileTimeInterceptor.InvocationCount);
+        Assert.Equal(1, StructCompatCompileTimeInterceptor.InvocationCount);
+        Assert.Equal("compat-value-task", StructCompatCompileTimeInterceptor.LastTag);
+    }
+
+    private static void ResetStructInterceptors()
+    {
+        StructFastPathCompileTimeInterceptor.ResetForTest();
+        StructCompatCompileTimeInterceptor.ResetForTest();
+        TaggedCompileTimeInterceptor.ResetForTest();
     }
 }

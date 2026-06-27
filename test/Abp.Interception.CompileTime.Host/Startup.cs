@@ -29,9 +29,12 @@ public class Startup
             endpoints.MapGet("/api/hello", (IHelloAppService helloAppService) => helloAppService.SayHello());
             endpoints.MapGet("/api/hello-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloTaskAsync());
             endpoints.MapGet("/api/hello-value-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloValueTaskAsync());
-            endpoints.MapGet("/api/hello-struct-tagged", (IHelloAppService helloAppService) => helloAppService.SayHelloStructTagged());
-            endpoints.MapGet("/api/hello-struct-tagged-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructTaggedTaskAsync());
-            endpoints.MapGet("/api/hello-struct-tagged-value-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructTaggedValueTaskAsync());
+            endpoints.MapGet("/api/hello-struct-fast-path", (IHelloAppService helloAppService) => helloAppService.SayHelloStructFastPath());
+            endpoints.MapGet("/api/hello-struct-fast-path-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructFastPathTaskAsync());
+            endpoints.MapGet("/api/hello-struct-fast-path-value-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructFastPathValueTaskAsync());
+            endpoints.MapGet("/api/hello-struct-compat", (IHelloAppService helloAppService) => helloAppService.SayHelloStructCompat());
+            endpoints.MapGet("/api/hello-struct-compat-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructCompatTaskAsync());
+            endpoints.MapGet("/api/hello-struct-compat-value-task", async (IHelloAppService helloAppService) => await helloAppService.SayHelloStructCompatValueTaskAsync());
             endpoints.MapGet("/api/hello-audited-tagged", (IHelloAppService helloAppService) => helloAppService.SayHelloAuditedAndTagged());
 
             endpoints.MapGet("/api/builtin/audited", (IBuiltInAspectAppService service) => service.GetAuditedMessage());

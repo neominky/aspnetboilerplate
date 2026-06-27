@@ -10,11 +10,17 @@ public interface IHelloAppService : IApplicationService
 
     System.Threading.Tasks.ValueTask<string> SayHelloValueTaskAsync();
 
-    string SayHelloStructTagged();
+    string SayHelloStructFastPath();
 
-    System.Threading.Tasks.Task<string> SayHelloStructTaggedTaskAsync();
+    System.Threading.Tasks.Task<string> SayHelloStructFastPathTaskAsync();
 
-    System.Threading.Tasks.ValueTask<string> SayHelloStructTaggedValueTaskAsync();
+    System.Threading.Tasks.ValueTask<string> SayHelloStructFastPathValueTaskAsync();
+
+    string SayHelloStructCompat();
+
+    System.Threading.Tasks.Task<string> SayHelloStructCompatTaskAsync();
+
+    System.Threading.Tasks.ValueTask<string> SayHelloStructCompatValueTaskAsync();
 
     string SayHelloAuditedAndTagged();
 }

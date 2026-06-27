@@ -184,12 +184,7 @@ internal static class InterceptorEmitter
 
     private static string GetAsyncClassBridgeTypeName(MethodModel method)
     {
-        if (IsGenericAsyncReturnType(method.ReturnType, out var resultType))
-        {
-            return $"{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}>?";
-        }
-
-        return $"{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}?";
+        return $"{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{GetAsyncResultTypeName(method.ReturnType)}>?";
     }
 
     private static void EmitLinearInterceptorChain(
@@ -315,22 +310,24 @@ internal static class InterceptorEmitter
         ImmutableArray<BakedInterceptorField> interceptors,
         string innerCallExpression)
     {
-        var layerType = IsGenericAsyncReturnType(method.ReturnType, out var taskResultType)
-            ? $"<{taskResultType}>"
-            : string.Empty;
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        var layerType = $"<{resultType}>";
+        var nextExpression = GetTaskNextExpression(method.ReturnType, innerCallExpression);
 
         EmitTaskLayerChainRecursive(
             builder,
             executor,
+            method,
             layerType,
             interceptors,
-            innerCallExpression,
+            nextExpression,
             index: 0);
     }
 
     private static void EmitTaskLayerChainRecursive(
         StringBuilder builder,
         string executor,
+        MethodModel method,
         string layerType,
         ImmutableArray<BakedInterceptorField> interceptors,
         string innerCallExpression,
@@ -339,7 +336,14 @@ internal static class InterceptorEmitter
         var layerMethod = GetTaskExecutorMethod(interceptors[index], layerType);
         if (index == 0)
         {
-            builder.AppendLine($"{GetIndent(0)}return {executor}.{layerMethod}(");
+            if (IsVoidAsyncReturnType(method.ReturnType))
+            {
+                builder.AppendLine($"{GetIndent(0)}return {AbpTypeNames.FullyQualified.AbpAsyncCoercion}.ToVoidTask({executor}.{layerMethod}(");
+            }
+            else
+            {
+                builder.AppendLine($"{GetIndent(0)}return {executor}.{layerMethod}(");
+            }
         }
         else
         {
@@ -358,12 +362,12 @@ internal static class InterceptorEmitter
         if (index == interceptors.Length - 1)
         {
             builder.AppendLine($"{argIndent}() => {innerCallExpression}");
-            EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+            EmitValueTaskLayerClose(builder, index, isRoot: index == 0, wrapVoidReturn: index == 0 && IsVoidAsyncReturnType(method.ReturnType));
             return;
         }
 
-        EmitTaskLayerChainRecursive(builder, executor, layerType, interceptors, innerCallExpression, index + 1);
-        EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+        EmitTaskLayerChainRecursive(builder, executor, method, layerType, interceptors, innerCallExpression, index + 1);
+        EmitValueTaskLayerClose(builder, index, isRoot: index == 0, wrapVoidReturn: index == 0 && IsVoidAsyncReturnType(method.ReturnType));
     }
 
     private static void EmitMultilineValueTaskLayerChain(
@@ -373,22 +377,24 @@ internal static class InterceptorEmitter
         ImmutableArray<BakedInterceptorField> interceptors,
         string innerCallExpression)
     {
-        var layerType = IsGenericAsyncReturnType(method.ReturnType, out var valueTaskResultType)
-            ? $"<{valueTaskResultType}>"
-            : string.Empty;
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        var layerType = $"<{resultType}>";
+        var nextExpression = GetValueTaskNextExpression(method.ReturnType, innerCallExpression);
 
         EmitValueTaskLayerChainRecursive(
             builder,
             executor,
+            method,
             layerType,
             interceptors,
-            innerCallExpression,
+            nextExpression,
             index: 0);
     }
 
     private static void EmitValueTaskLayerChainRecursive(
         StringBuilder builder,
         string executor,
+        MethodModel method,
         string layerType,
         ImmutableArray<BakedInterceptorField> interceptors,
         string innerCallExpression,
@@ -397,7 +403,14 @@ internal static class InterceptorEmitter
         var layerMethod = GetValueTaskExecutorMethod(interceptors[index], layerType);
         if (index == 0)
         {
-            builder.AppendLine($"{GetIndent(0)}return {executor}.{layerMethod}(");
+            if (IsVoidAsyncReturnType(method.ReturnType))
+            {
+                builder.AppendLine($"{GetIndent(0)}return {AbpTypeNames.FullyQualified.AbpAsyncCoercion}.ToVoidValueTask({executor}.{layerMethod}(");
+            }
+            else
+            {
+                builder.AppendLine($"{GetIndent(0)}return {executor}.{layerMethod}(");
+            }
         }
         else
         {
@@ -416,12 +429,12 @@ internal static class InterceptorEmitter
         if (index == interceptors.Length - 1)
         {
             builder.AppendLine($"{argIndent}() => {innerCallExpression}");
-            EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+            EmitValueTaskLayerClose(builder, index, isRoot: index == 0, wrapVoidReturn: index == 0 && IsVoidAsyncReturnType(method.ReturnType));
             return;
         }
 
-        EmitValueTaskLayerChainRecursive(builder, executor, layerType, interceptors, innerCallExpression, index + 1);
-        EmitValueTaskLayerClose(builder, index, isRoot: index == 0);
+        EmitValueTaskLayerChainRecursive(builder, executor, method, layerType, interceptors, innerCallExpression, index + 1);
+        EmitValueTaskLayerClose(builder, index, isRoot: index == 0, wrapVoidReturn: index == 0 && IsVoidAsyncReturnType(method.ReturnType));
     }
 
     private static bool UsesClassBridgeParameterForTask(BakedInterceptorField interceptor)
@@ -494,9 +507,43 @@ internal static class InterceptorEmitter
         };
     }
 
-    private static void EmitValueTaskLayerClose(StringBuilder builder, int index, bool isRoot)
+    private static void EmitValueTaskLayerClose(StringBuilder builder, int index, bool isRoot, bool wrapVoidReturn)
     {
+        if (isRoot && wrapVoidReturn)
+        {
+            builder.AppendLine(isRoot ? $"{GetIndent(index)}));" : $"{GetIndent(index)}))");
+            return;
+        }
+
         builder.AppendLine(isRoot ? $"{GetIndent(index)});" : $"{GetIndent(index)})");
+    }
+
+    private static string GetAsyncResultTypeName(string returnType)
+    {
+        return IsGenericAsyncReturnType(returnType, out var resultType)
+            ? resultType
+            : AbpTypeNames.FullyQualified.AbpUnit;
+    }
+
+    private static bool IsVoidAsyncReturnType(string returnType)
+    {
+        var normalized = NormalizeTypeName(returnType);
+        return normalized == "System.Threading.Tasks.Task"
+               || normalized == "System.Threading.Tasks.ValueTask";
+    }
+
+    private static string GetTaskNextExpression(string returnType, string innerCallExpression)
+    {
+        return IsVoidAsyncReturnType(returnType)
+            ? $"{AbpTypeNames.FullyQualified.AbpAsyncCoercion}.FromVoidTask({innerCallExpression})"
+            : innerCallExpression;
+    }
+
+    private static string GetValueTaskNextExpression(string returnType, string innerCallExpression)
+    {
+        return IsVoidAsyncReturnType(returnType)
+            ? $"{AbpTypeNames.FullyQualified.AbpAsyncCoercion}.FromVoidValueTask({innerCallExpression})"
+            : innerCallExpression;
     }
 
     private static string NormalizeTypeName(string returnType)
@@ -649,11 +696,6 @@ internal static class InterceptorEmitter
             ? "global::System.Threading.Tasks.Task"
             : "global::System.Threading.Tasks.ValueTask";
 
-        if (IsGenericAsyncReturnType(method.ReturnType, out var resultType))
-        {
-            return $"{AbpTypeNames.FullyQualified.AbpInvocationStruct}<{asyncTypePrefix}<{resultType}>>";
-        }
-
-        return $"{AbpTypeNames.FullyQualified.AbpInvocationStruct}<{asyncTypePrefix}>";
+        return $"{AbpTypeNames.FullyQualified.AbpInvocationStruct}<{asyncTypePrefix}<{GetAsyncResultTypeName(method.ReturnType)}>>";
     }
 }
