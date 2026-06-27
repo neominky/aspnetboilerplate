@@ -11,16 +11,16 @@ namespace Abp.Dependency.CompileTime
     /// </summary>
     public readonly struct AbpStructSyncProceedInfo
     {
-        private readonly Func<Task<object?>> _proceed;
+        private readonly Func<object?> _proceed;
 
-        internal AbpStructSyncProceedInfo(Func<Task<object?>> proceed)
+        internal AbpStructSyncProceedInfo(Func<object?> proceed)
         {
             _proceed = proceed;
         }
 
         public void Invoke()
         {
-            _proceed().GetAwaiter().GetResult();
+            _proceed();
         }
     }
 
@@ -47,7 +47,7 @@ namespace Abp.Dependency.CompileTime
     /// </summary>
     public struct AbpInvocationStruct
     {
-        private Func<Task<object?>>? _proceedAsync;
+        private Func<object?>? _proceedSync;
 
         public object InvocationTarget { get; private set; }
 
@@ -74,9 +74,9 @@ namespace Abp.Dependency.CompileTime
             Arguments = arguments;
         }
 
-        public void SetSyncProceed(Func<Task<object?>> proceed)
+        public void SetSyncProceed(Func<object?> proceed)
         {
-            _proceedAsync = proceed;
+            _proceedSync = proceed;
         }
 
         /// <summary>
@@ -85,12 +85,12 @@ namespace Abp.Dependency.CompileTime
         /// </summary>
         public AbpStructSyncProceedInfo CaptureProceedInfo()
         {
-            if (_proceedAsync == null)
+            if (_proceedSync == null)
             {
                 throw new InvalidOperationException("Proceed is not configured.");
             }
 
-            return new AbpStructSyncProceedInfo(_proceedAsync);
+            return new AbpStructSyncProceedInfo(_proceedSync);
         }
 
         /// <summary>
@@ -98,12 +98,12 @@ namespace Abp.Dependency.CompileTime
         /// </summary>
         public void Proceed()
         {
-            if (_proceedAsync == null)
+            if (_proceedSync == null)
             {
                 throw new InvalidOperationException("Proceed is not configured.");
             }
 
-            ReturnValue = _proceedAsync().GetAwaiter().GetResult();
+            ReturnValue = _proceedSync();
         }
     }
 

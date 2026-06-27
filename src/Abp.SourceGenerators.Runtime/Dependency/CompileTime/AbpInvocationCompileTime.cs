@@ -9,6 +9,8 @@ namespace Abp.Dependency.CompileTime
         IAbpInterceptorValueTaskReturnHost, IAbpInterceptorValueTaskReturnSource
     {
         private readonly MethodInfo _method;
+        private Action? _proceedSync;
+        private Func<object?>? _proceedSyncFunc;
         private Func<Task<object?>>? _proceedAsync;
 
         public AbpInvocationCompileTime(
@@ -40,13 +42,34 @@ namespace Abp.Dependency.CompileTime
 
         public ValueTask ValueTaskReturnValue { get; set; }
 
+        public void SetSyncProceed(Func<object?> proceed)
+        {
+            _proceedSyncFunc = proceed;
+            _proceedSync = null;
+            _proceedAsync = null;
+        }
+
         public void SetProceed(Func<Task<object?>> proceed)
         {
             _proceedAsync = proceed;
+            _proceedSync = null;
+            _proceedSyncFunc = null;
         }
 
         public void Proceed()
         {
+            if (_proceedSyncFunc != null)
+            {
+                ReturnValue = _proceedSyncFunc();
+                return;
+            }
+
+            if (_proceedSync != null)
+            {
+                _proceedSync();
+                return;
+            }
+
             if (_proceedAsync == null)
             {
                 throw new InvalidOperationException("Proceed is not configured.");
@@ -60,6 +83,19 @@ namespace Abp.Dependency.CompileTime
         public MethodInfo GetConcreteMethod() => _method;
 
         public object? GetValueTaskReturnForCompatibility() => ValueTaskReturnValue;
+
+        public static AbpInvocationCompileTime EnsureClassBridge(
+            ref AbpInvocationStruct structInvocation,
+            ref AbpInvocationCompileTime? classBridge)
+        {
+            classBridge ??= new AbpInvocationCompileTime(
+                structInvocation.InvocationTarget,
+                structInvocation.Method,
+                structInvocation.Arguments);
+
+            classBridge.ReturnValue = structInvocation.ReturnValue;
+            return classBridge;
+        }
     }
 
     public sealed class AbpInvocationCompileTime<TResult> : AbpInvocationCompileTime,

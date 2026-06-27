@@ -72,11 +72,11 @@ namespace Abp.Dependency.CompileTime
             InitializeStruct(ref invocation, classInvocation);
             invocation.SetSyncProceed(() =>
             {
-                var proceedInfo = classInvocation.CaptureProceedInfo();
-                proceedInfo.Invoke();
-                return Task.FromResult<object?>(classInvocation.ReturnValue);
+                classInvocation.CaptureProceedInfo().Invoke();
+                return classInvocation.ReturnValue;
             });
             InternalInterceptSynchronous(ref invocation);
+            invocation.ReturnValue ??= classInvocation.ReturnValue;
             classInvocation.ReturnValue = invocation.ReturnValue;
         }
 

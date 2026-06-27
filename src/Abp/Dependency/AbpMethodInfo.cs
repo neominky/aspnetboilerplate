@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
@@ -12,6 +13,8 @@ namespace Abp.Dependency
     /// </summary>
     public sealed class AbpMethodInfo : MethodInfo
     {
+        private static readonly ConcurrentDictionary<MethodInfo, MethodInfo> InvocationMethodCache = new();
+
         private readonly MethodInfo _inner;
 
         private AbpMethodInfo(MethodInfo inner, AbpMethodInterceptionMetadata metadata)
@@ -31,13 +34,16 @@ namespace Abp.Dependency
                 return method;
             }
 
-            if (AbpMethodInterceptionMetadataProvider.Instance.TryGet(method, out var metadata)
-                && metadata != null)
+            return InvocationMethodCache.GetOrAdd(method, static methodInfo =>
             {
-                return new AbpMethodInfo(method, metadata);
-            }
+                if (AbpMethodInterceptionMetadataProvider.Instance.TryGet(methodInfo, out var metadata)
+                    && metadata != null)
+                {
+                    return new AbpMethodInfo(methodInfo, metadata);
+                }
 
-            return method;
+                return methodInfo;
+            });
         }
 
         public static bool TryGetMetadata(MethodInfo method, out AbpMethodInterceptionMetadata? metadata)

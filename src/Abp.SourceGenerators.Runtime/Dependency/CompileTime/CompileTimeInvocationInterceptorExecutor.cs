@@ -13,7 +13,7 @@ namespace Abp.Dependency.CompileTime
         public static void RunSyncAllocationFreeLayer(
             ref AbpInvocationStruct invocation,
             IAbpInterceptorSync interceptor,
-            Func<Task<object?>> next)
+            Func<object?> next)
         {
             invocation.SetSyncProceed(next);
             interceptor.InterceptSynchronous(ref invocation);
@@ -22,21 +22,13 @@ namespace Abp.Dependency.CompileTime
         public static void RunSyncLayer(
             ref AbpInvocationStruct invocation,
             AbpInterceptorBase interceptor,
-            Func<Task<object?>> next)
+            ref AbpInvocationCompileTime? classBridge,
+            Func<object?> next)
         {
             invocation.SetSyncProceed(next);
 
-            var bridge = new AbpInvocationCompileTime(
-                invocation.InvocationTarget,
-                invocation.Method,
-                invocation.Arguments);
-            bridge.ReturnValue = invocation.ReturnValue;
-            bridge.SetProceed(async () =>
-            {
-                var result = await next();
-                bridge.ReturnValue = result;
-                return result;
-            });
+            var bridge = AbpInvocationCompileTime.EnsureClassBridge(ref invocation, ref classBridge);
+            bridge.SetSyncProceed(next);
 
             interceptor.InterceptSynchronous(bridge);
             invocation.ReturnValue = bridge.ReturnValue ?? invocation.ReturnValue;

@@ -10,3 +10,5 @@ Upstream ASP.NET Boilerplate documentation remains in [`doc/`](../doc/) (website
 |:---------|:------------|
 | [compile-time-interception-migration.md](compile-time-interception-migration.md) | Step 1: Castle DynamicProxy → `Abp.SourceGenerators` |
 | [compile-time-interception-migration.ko.md](compile-time-interception-migration.ko.md) | 위 가이드 (한국어) |
+
+Benchmarks (this fork): [`benchmark/Abp.Interception.Benchmarks.RunAll`](../benchmark/Abp.Interception.Benchmarks.RunAll) — NuGet Castle vs fork compile-time (separate processes).

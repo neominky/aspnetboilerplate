@@ -82,7 +82,7 @@ Application service classes (`IApplicationService` implementations) usually need
 | Project | Role |
 |:--------|:-----|
 | `Abp.SourceGenerators` | Roslyn source generator. Emits `{Service}_Intercepted`, module IoC partials, and metadata registration. |
-| `Abp.SourceGenerators.Runtime` | Runtime support in namespace `Abp.Dependency.CompileTime` (`CompileTimeInterceptionConfiguration`, `AbpInvocationCompileTime`, `AbpInvocationStruct`, `AbpInterceptorBaseAllocationFree`, `IAbpInterceptorSync` / `Task` / `ValueTask` async interfaces, IoC extensions). |
+| `Abp.SourceGenerators.Runtime` | Runtime support in namespace `Abp.Dependency.CompileTime` (`CompileTimeInterceptionConfiguration`, `AbpInvocationCompileTime`, `AbpInvocationStruct`, `SyncInvocationState`, `AbpInterceptorBaseAllocationFree`, `IAbpInterceptorSync` / `Task` / `ValueTask` async interfaces, `AbpInvocationCompileTimeAsyncBridge`, IoC extensions). |
 | `Abp` | Shared runtime model: `AbpMethodInfo`, `AbpMethodInterceptionMetadata`, `AbpMethodInterceptionMetadataProvider`, `IAbpInvocation`, framework helpers with metadata fast paths. |
 | `Abp.Interception.Castle` | Default Castle DynamicProxy path when compile-time interception is **not** enabled. |
 
@@ -198,21 +198,116 @@ Validation → Auditing → EntityHistory → UnitOfWork → Authorization → u
 
 Supported method return types: `void`, sync `T`, `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`.
 
-## Compile-time execution paths
+## Compile-time execution model (direct emit)
 
-Generated methods run through stack `AbpInvocationStruct` / `AbpInvocationStruct<TAsync>` and `CompileTimeInvocationInterceptorExecutor`. Built-in interceptors (`AuthorizationInterceptor`, `AuditingInterceptor`, …) inherit `AbpInterceptorBase` only and always use the **class-bridge** path (`AbpInvocationCompileTime` implementing `IAbpInvocation`).
+The generator does **not** emit nested lambdas or `RunSyncLayer` / `RunTaskViaClassBridgeLayer` wrapper calls in `{Name}_Intercepted`. Each interceptor layer is **inlined C#** that calls the interceptor directly. Proceed wiring uses **method groups** stored in `readonly Func<…>` fields assigned in the constructor (no per-invocation delegate allocation).
 
-User interceptors are routed per method layer:
+### Sync chain
+
+For intercepted sync methods the generator emits:
+
+| Artifact | Role |
+|----------|------|
+| `SyncInvocationState _syncInvocationState` | Per-service scratch: `AbpInvocationStruct` + optional `AbpInvocationCompileTime?` class bridge, reset per call |
+| `{Method}_SyncProceedTail`, `{Method}_SyncProceedStepN` | Private methods; tail calls `_inner.{Method}(…)` using `Invocation.Arguments` when parameters exist |
+| `Func<object?> _…SyncProceedTail/StepN` | Ctor-wired method groups passed to `SetSyncProceed` |
+
+Public method body (conceptually):
+
+```csharp
+_syncInvocationState.Reset(_inner, GetMessageInvocationMethod, arguments);
+ref var invocation = ref _syncInvocationState.Invocation;
+invocation.SetSyncProceed(_getMessageSyncProceedStep1);
+var bridge = AbpInvocationCompileTime.EnsureClassBridge(ref invocation, ref _syncInvocationState.ClassBridge);
+bridge.SetSyncProceed(_getMessageSyncProceedStep1);
+_unitOfWorkInterceptor.InterceptSynchronous(bridge);
+invocation.ReturnValue = bridge.ReturnValue ?? invocation.ReturnValue;
+return (string)invocation.ReturnValue!;
+```
+
+**Class-bridge layer:** `EnsureClassBridge` → `bridge.SetSyncProceed(next)` → `{Interceptor}.InterceptSynchronous(bridge)`.
+
+**Allocation-free layer:** `invocation.SetSyncProceed(next)` → `((IAbpInterceptorSync)interceptor).InterceptSynchronous(ref invocation)`.
+
+`CompileTimeInvocationInterceptorExecutor` remains in the runtime for legacy/adapters; **generated app-service code does not call it**.
+
+### Async chain
+
+Async methods use the same proceed-method pattern with `Func<Task<TResult>>` / `Func<ValueTask<TResult>>` fields and per-method invocation state (`_getMessageTaskAsyncInvocation`, `_getMessageTaskAsyncClassBridge`).
+
+**Class-bridge Task:** `SetProceed(next)` → `EnsureClassBridge` → `AbpInvocationCompileTimeAsyncBridge.ConfigureTaskProceed` → `{Interceptor}.InterceptAsynchronous<T>(bridge)` → `ResolveTaskReturn`.
+
+**Allocation-free Task:** `SetProceed(next)` → `((IAbpInterceptorTaskAsync)interceptor).InterceptAsynchronous<T>(invocation)`.
+
+**Class-bridge ValueTask:** same with `ConfigureValueTaskProceed` and `AbpInvocationCompileTimeTaskCompatible` when the interceptor expects `IAbpInvocation`.
+
+There is **no** nested `() => RunTaskViaClassBridgeLayer(…)` chain in generated code.
+
+### Interceptor routing (unchanged semantics)
+
+Built-in interceptors (`AuthorizationInterceptor`, `AuditingInterceptor`, …) inherit `AbpInterceptorBase` only and always use the **class-bridge** path.
+
+User interceptors are routed per layer:
 
 | Return shape | Class-bridge (`AbpInterceptorBase`) | Allocation-free (`AbpInterceptorBaseAllocationFree`) |
 |:-------------|:------------------------------------|:-----------------------------------------------------|
-| sync | `RunSyncLayer` → `InterceptSynchronous(IAbpInvocation)` | `RunSyncAllocationFreeLayer` → `IAbpInterceptorSync` → `protected InternalInterceptSynchronous(ref AbpInvocationStruct)` |
-| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → `protected InternalInterceptAsynchronous<TResult>(AbpInvocationStruct<Task<TResult>>)` (by value) |
-| `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` (Task-compatible bridge) | `RunValueTaskAllocationFreeLayer`, or `RunValueTaskViaTaskStructLayer` when only Task struct `Internal*` is overridden |
+| sync | `InterceptSynchronous(IAbpInvocation)` via generated bridge setup | `IAbpInterceptorSync.InterceptSynchronous(ref AbpInvocationStruct)` |
+| `Task` / `Task<T>` | `InterceptAsynchronous` / `InterceptAsynchronous<T>` on bridge | `IAbpInterceptorTaskAsync.InterceptAsynchronous<T>(invocation)` |
+| `ValueTask` / `ValueTask<T>` | `InterceptAsynchronous` on `AbpInvocationCompileTimeTaskCompatible` | `IAbpInterceptorValueTaskAsync`, or Task-struct bridge when only Task `Internal*` exists |
 
-`AbpInvocationCompileTimeAsyncBridge` connects struct layers to class-bridge interceptors when built-in and user interceptors are mixed in one chain. For allocation-free interceptors it calls `IAbpInterceptorSync` / `IAbpInterceptorTaskAsync` / `IAbpInterceptorValueTaskAsync` directly (no `IAbpInvocation` on the compile-time path).
+`AllocationFreeInterceptorAnalyzer` selects allocation-free routing when `AbpInterceptorBaseAllocationFree` overrides non-trivial `protected Internal*` struct methods.
 
-The generator picks allocation-free routing when `AllocationFreeInterceptorAnalyzer` finds non–proceed-only overrides of `protected Internal*` struct methods on `AbpInterceptorBaseAllocationFree`.
+### Caching
+
+- `AbpMethodInfo.GetInvocationMethod` — `ConcurrentDictionary` cache for invocation `MethodInfo` wrappers.
+- Static `AbpInvocationMethod` fields on `{Name}_Intercepted` — one lookup per method at type load.
+- Proceed `Func` fields — wired once in ctor via method groups.
+
+## Benchmarks (fork)
+
+Projects under [`benchmark/`](../benchmark/):
+
+| Project | Role |
+|---------|------|
+| `Abp.Interception.Benchmarks.Contracts` | Shared counters and verification |
+| `Abp.Interception.Benchmarks.NuGet` | NuGet Abp 10.4 + Castle DynamicProxy |
+| `Abp.Interception.Benchmarks.Fork` | This fork + `Abp.SourceGenerators` (class-bridge vs allocation-free) |
+| `Abp.Interception.Benchmarks.RunAll` | Runs NuGet and Fork in **separate processes** (same `Abp` assembly cannot load twice) |
+
+Run (Release):
+
+```bash
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.NuGet -- --filter "*"
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.Fork -- --filter "*"
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.Fork -- --filter "*" --verify
+```
+
+Each scenario: **3 user interceptors**, 1 sync or async call per iteration. Sample results (.NET 9, i9-14900KF, Release):
+
+| Scenario | NuGet Castle | Fork class-bridge | Fork allocation-free |
+|----------|-------------:|------------------:|---------------------:|
+| Sync | 39.8 ns / 104 B | 43.2 ns / 104 B | **23.7 ns / 0 B** |
+| Task async | 1,029 ns / 806 B | 938 ns / 1,272 B | **843 ns / 678 B** |
+
+Allocation-free sync is faster than Castle with **zero** managed allocation per call. Class-bridge sync matches Castle allocation (~104 B) with similar latency. Async class-bridge is faster than Castle on time but allocates more (bridge + `ConfigureTaskProceed`); allocation-free async improves both time and alloc vs NuGet.
+
+## Compile-time execution paths (runtime helpers)
+
+## Compile-time execution paths (runtime helpers)
+
+`CompileTimeInvocationInterceptorExecutor` and `AbpInvocationCompileTimeAsyncBridge` are **runtime helpers** used by adapters and tests. Generated `{Name}_Intercepted` code inlines interceptor calls instead of calling `RunSyncLayer` / `RunTaskViaClassBridgeLayer`.
+
+`AbpInvocationCompileTimeAsyncBridge` exposes `ConfigureTaskProceed`, `ConfigureValueTaskProceed`, `ResolveTaskReturn`, and `ResolveValueTaskReturn` for generated class-bridge async layers.
+
+Legacy executor entry points (for reference):
+
+| Return shape | Class-bridge | Allocation-free |
+|:-------------|:-------------|:----------------|
+| sync | `RunSyncLayer` | `RunSyncAllocationFreeLayer` |
+| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` | `RunTaskAllocationFreeLayer` |
+| `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` | `RunValueTaskAllocationFreeLayer` / `RunValueTaskViaTaskStructLayer` |
+
+Built-in interceptors always use class-bridge. User interceptors: see routing table in **Compile-time execution model** above.
 
 ## 5. User-defined interceptors
 
@@ -317,3 +412,9 @@ Run [`test/Abp.Interception.CompileTime.Tests`](../test/Abp.Interception.Compile
 | `BuiltInInterceptorWebTests` | Built-in auditing with user interceptors in the same chain |
 
 With `EmitCompilerGeneratedFiles` on the host project, generated sources appear under `obj/Generated/Abp.SourceGenerators/`.
+
+Benchmark verification (3 interceptors per call):
+
+```bash
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.Fork -- --filter "*" --verify
+```

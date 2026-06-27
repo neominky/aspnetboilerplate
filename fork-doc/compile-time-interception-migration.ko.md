@@ -82,7 +82,7 @@ public partial class MyModule : AbpModule
 | 프로젝트 | 역할 |
 |:---------|:-----|
 | `Abp.SourceGenerators` | Roslyn 소스 생성기. `{Service}_Intercepted`, 모듈 IoC partial, 메타데이터 등록 코드 생성. |
-| `Abp.SourceGenerators.Runtime` | `Abp.Dependency.CompileTime` 네임스페이스의 런타임 지원 (`CompileTimeInterceptionConfiguration`, `AbpInvocationCompileTime`, `AbpInvocationStruct`, `AbpInterceptorBaseAllocationFree`, `IAbpInterceptorSync` / Task / ValueTask async 인터페이스, IoC 확장). |
+| `Abp.SourceGenerators.Runtime` | `Abp.Dependency.CompileTime` 네임스페이스의 런타임 지원 (`CompileTimeInterceptionConfiguration`, `AbpInvocationCompileTime`, `AbpInvocationStruct`, `SyncInvocationState`, `AbpInterceptorBaseAllocationFree`, `IAbpInterceptorSync` / Task / ValueTask async 인터페이스, `AbpInvocationCompileTimeAsyncBridge`, IoC 확장). |
 | `Abp` | 공유 런타임 모델: `AbpMethodInfo`, `AbpMethodInterceptionMetadata`, `AbpMethodInterceptionMetadataProvider`, `IAbpInvocation`, 메타데이터 fast path를 가진 프레임워크 헬퍼. |
 | `Abp.Interception.Castle` | compile-time 인터셉션이 **비활성**일 때의 기본 Castle DynamicProxy 경로. |
 
@@ -194,21 +194,116 @@ Validation → Auditing → EntityHistory → UnitOfWork → Authorization → �
 
 지원 반환 형식: `void`, 동기 `T`, `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`.
 
-## compile-time 실행 경로
+## compile-time 실행 모델 (직접 emit)
 
-생성된 메서드는 스택 `AbpInvocationStruct` / `AbpInvocationStruct<TAsync>`와 `CompileTimeInvocationInterceptorExecutor`를 통해 실행됩니다. 내장 인터셉터(`AuthorizationInterceptor`, `AuditingInterceptor` 등)는 `AbpInterceptorBase`만 상속하며 항상 **class-bridge** 경로(`AbpInvocationCompileTime` / `IAbpInvocation`)를 사용합니다.
+생성기는 `{Name}_Intercepted`에 중첩 람다나 `RunSyncLayer` / `RunTaskViaClassBridgeLayer` 래퍼 호출을 **내지 않습니다**. 각 인터셉터 레이어는 인터셉터를 **직접 호출하는 C#**으로 인라인됩니다. Proceed 연결은 생성자에서 method group으로 연결한 `readonly Func<…>` 필드를 사용합니다 (호출마다 delegate 할당 없음).
+
+### 동기 체인
+
+인터셉션이 있는 sync 메서드에 대해 생성기는 다음을 emit합니다.
+
+| 생성물 | 역할 |
+|--------|------|
+| `SyncInvocationState _syncInvocationState` | 서비스당 스크래치: `AbpInvocationStruct` + 선택적 `AbpInvocationCompileTime?` class bridge, 호출마다 `Reset` |
+| `{Method}_SyncProceedTail`, `{Method}_SyncProceedStepN` | private proceed 메서드; tail은 `Invocation.Arguments`로 `_inner.{Method}(…)` 호출 |
+| `Func<object?> _…SyncProceedTail/StepN` | ctor에서 method group으로 연결, `SetSyncProceed`에 전달 |
+
+공개 메서드 본문 (개념):
+
+```csharp
+_syncInvocationState.Reset(_inner, GetMessageInvocationMethod, arguments);
+ref var invocation = ref _syncInvocationState.Invocation;
+invocation.SetSyncProceed(_getMessageSyncProceedStep1);
+var bridge = AbpInvocationCompileTime.EnsureClassBridge(ref invocation, ref _syncInvocationState.ClassBridge);
+bridge.SetSyncProceed(_getMessageSyncProceedStep1);
+_unitOfWorkInterceptor.InterceptSynchronous(bridge);
+invocation.ReturnValue = bridge.ReturnValue ?? invocation.ReturnValue;
+return (string)invocation.ReturnValue!;
+```
+
+**class-bridge 레이어:** `EnsureClassBridge` → `bridge.SetSyncProceed(next)` → `{Interceptor}.InterceptSynchronous(bridge)`.
+
+**allocation-free 레이어:** `invocation.SetSyncProceed(next)` → `((IAbpInterceptorSync)interceptor).InterceptSynchronous(ref invocation)`.
+
+`CompileTimeInvocationInterceptorExecutor`는 런타임 어댑터용으로 남아 있으며, **생성된 앱 서비스 코드는 이를 호출하지 않습니다**.
+
+### 비동기 체인
+
+async 메서드도 동일한 proceed 메서드 패턴을 사용합니다. `Func<Task<TResult>>` / `Func<ValueTask<TResult>>` 필드와 메서드별 invocation 상태(`_getMessageTaskAsyncInvocation`, `_getMessageTaskAsyncClassBridge`)를 emit합니다.
+
+**class-bridge Task:** `SetProceed(next)` → `EnsureClassBridge` → `AbpInvocationCompileTimeAsyncBridge.ConfigureTaskProceed` → `{Interceptor}.InterceptAsynchronous<T>(bridge)` → `ResolveTaskReturn`.
+
+**allocation-free Task:** `SetProceed(next)` → `((IAbpInterceptorTaskAsync)interceptor).InterceptAsynchronous<T>(invocation)`.
+
+**class-bridge ValueTask:** `ConfigureValueTaskProceed` 및 필요 시 `AbpInvocationCompileTimeTaskCompatible`.
+
+생성 코드에 `() => RunTaskViaClassBridgeLayer(…)` 중첩 체인은 **없습니다**.
+
+### 인터셉터 라우팅 (의미는 동일)
+
+내장 인터셉터(`AuthorizationInterceptor`, `AuditingInterceptor` 등)는 `AbpInterceptorBase`만 상속하며 항상 **class-bridge** 경로를 사용합니다.
 
 사용자 인터셉터는 레이어별로 다음처럼 라우팅됩니다.
 
 | 반환 형태 | class-bridge (`AbpInterceptorBase`) | allocation-free (`AbpInterceptorBaseAllocationFree`) |
 |:----------|:-----------------------------------|:-------------------------------------------------------|
-| sync | `RunSyncLayer` → `InterceptSynchronous(IAbpInvocation)` | `RunSyncAllocationFreeLayer` → `IAbpInterceptorSync` → `protected InternalInterceptSynchronous(ref AbpInvocationStruct)` |
-| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` → `InternalInterceptAsynchronous(IAbpInvocation)` | `RunTaskAllocationFreeLayer` → `IAbpInterceptorTaskAsync` → `protected InternalInterceptAsynchronous<TResult>(AbpInvocationStruct<Task<TResult>>)` (by value) |
-| `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` (Task 호환 브리지) | `RunValueTaskAllocationFreeLayer`, 또는 Task struct `Internal*`만 있을 때 `RunValueTaskViaTaskStructLayer` |
+| sync | 생성된 bridge 설정 후 `InterceptSynchronous(IAbpInvocation)` | `IAbpInterceptorSync.InterceptSynchronous(ref AbpInvocationStruct)` |
+| `Task` / `Task<T>` | bridge에서 `InterceptAsynchronous` / `InterceptAsynchronous<T>` | `IAbpInterceptorTaskAsync.InterceptAsynchronous<T>(invocation)` |
+| `ValueTask` / `ValueTask<T>` | `AbpInvocationCompileTimeTaskCompatible` 경유 | `IAbpInterceptorValueTaskAsync`, 또는 Task struct `Internal*`만 있을 때 Task-struct bridge |
 
-`AbpInvocationCompileTimeAsyncBridge`는 내장·사용자 인터셉터가 한 체인에 섞일 때 struct 레이어와 class-bridge 인터셉터를 연결합니다. allocation-free 인터셉터에는 compile-time 경로에서 `IAbpInterceptorSync` / `IAbpInterceptorTaskAsync` / `IAbpInterceptorValueTaskAsync`를 직접 호출합니다 (`IAbpInvocation` 미사용).
+`AllocationFreeInterceptorAnalyzer`가 `AbpInterceptorBaseAllocationFree`의 비 trivial `protected Internal*` override를 찾으면 allocation-free 라우팅을 선택합니다.
 
-생성기는 `AbpInterceptorBaseAllocationFree`에서 proceed-only가 아닌 `protected Internal*` struct override가 있으면 allocation-free 라우팅을 선택합니다 (`AllocationFreeInterceptorAnalyzer`).
+### 캐싱
+
+- `AbpMethodInfo.GetInvocationMethod` — invocation `MethodInfo` 래퍼용 `ConcurrentDictionary` 캐시.
+- `{Name}_Intercepted`의 static `AbpInvocationMethod` 필드 — 타입 로드 시 메서드당 1회.
+- Proceed `Func` 필드 — ctor에서 method group으로 1회 연결.
+
+## 벤치마크 (fork)
+
+[`benchmark/`](../benchmark/) 프로젝트:
+
+| 프로젝트 | 역할 |
+|---------|------|
+| `Abp.Interception.Benchmarks.Contracts` | 공통 카운터·검증 |
+| `Abp.Interception.Benchmarks.NuGet` | NuGet Abp 10.4 + Castle DynamicProxy |
+| `Abp.Interception.Benchmarks.Fork` | 본 fork + `Abp.SourceGenerators` (class-bridge vs allocation-free) |
+| `Abp.Interception.Benchmarks.RunAll` | NuGet·Fork를 **별도 프로세스**로 실행 (동일 `Abp` 어셈블리 이중 로드 불가) |
+
+실행 (Release):
+
+```bash
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.NuGet -- --filter "*"
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.Fork -- --filter "*"
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.Fork -- --filter "*" --verify
+```
+
+시나리오당 **사용자 인터셉터 3개**, sync/async 호출 1회. 샘플 결과 (.NET 9, i9-14900KF, Release):
+
+| 시나리오 | NuGet Castle | Fork class-bridge | Fork allocation-free |
+|----------|-------------:|------------------:|---------------------:|
+| Sync | 39.8 ns / 104 B | 43.2 ns / 104 B | **23.7 ns / 0 B** |
+| Task async | 1,029 ns / 806 B | 938 ns / 1,272 B | **843 ns / 678 B** |
+
+allocation-free sync는 Castle보다 빠르고 **managed 할당 0**. class-bridge sync는 Castle과 할당(~104 B)·지연이 유사합니다. async class-bridge는 시간은 개선되나 bridge·`ConfigureTaskProceed`로 할당이 더 큽니다. allocation-free async는 NuGet 대비 시간·할당 모두 개선됩니다.
+
+## compile-time 실행 경로 (런타임 헬퍼)
+
+## compile-time 실행 경로 (런타임 헬퍼)
+
+`CompileTimeInvocationInterceptorExecutor`와 `AbpInvocationCompileTimeAsyncBridge`는 어댑터·테스트용 **런타임 헬퍼**입니다. 생성된 `{Name}_Intercepted` 코드는 `RunSyncLayer` / `RunTaskViaClassBridgeLayer`를 호출하지 않고 인터셉터 호출을 인라인합니다.
+
+`AbpInvocationCompileTimeAsyncBridge`는 생성된 class-bridge async 레이어용으로 `ConfigureTaskProceed`, `ConfigureValueTaskProceed`, `ResolveTaskReturn`, `ResolveValueTaskReturn`을 public으로 제공합니다.
+
+레거시 executor 진입점 (참고):
+
+| 반환 형태 | class-bridge | allocation-free |
+|:----------|:-------------|:----------------|
+| sync | `RunSyncLayer` | `RunSyncAllocationFreeLayer` |
+| `Task` / `Task<T>` | `RunTaskViaClassBridgeLayer` | `RunTaskAllocationFreeLayer` |
+| `ValueTask` / `ValueTask<T>` | `RunValueTaskViaClassBridgeLayer` | `RunValueTaskAllocationFreeLayer` / `RunValueTaskViaTaskStructLayer` |
+
+내장 인터셉터는 항상 class-bridge. 사용자 인터셉터 라우팅은 위 **compile-time 실행 모델** 표를 참고하세요.
 
 ## 5. 사용자 정의 인터셉터
 
@@ -303,3 +398,9 @@ public class MyAppService : ApplicationService { /* ... */ }
 | `BuiltInInterceptorWebTests` | 내장 auditing과 사용자 인터셉터가 같은 체인에서 동작 |
 
 호스트 프로젝트에 `EmitCompilerGeneratedFiles`가 켜져 있으면 생성 코드는 `obj/Generated/Abp.SourceGenerators/`에서 볼 수 있습니다.
+
+벤치마크 검증 (호출당 인터셉터 3개):
+
+```bash
+dotnet run -c Release --project benchmark/Abp.Interception.Benchmarks.Fork -- --filter "*" --verify
+```

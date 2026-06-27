@@ -8,7 +8,7 @@ namespace Abp.Dependency.CompileTime
     /// Presents <see cref="ValueTask"/> proceed results as <see cref="Task"/> for existing Task-based interceptors
     /// without casting <see cref="ValueTask"/> to <see cref="Task"/>.
     /// </summary>
-    internal sealed class AbpInvocationCompileTimeTaskCompatible : IAbpInvocation
+    public sealed class AbpInvocationCompileTimeTaskCompatible : IAbpInvocation
     {
         private readonly IAbpInvocation _inner;
 

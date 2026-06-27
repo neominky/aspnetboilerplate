@@ -6,7 +6,7 @@ namespace Abp.Dependency.CompileTime
     /// <summary>
     /// Adapts stack-based struct invocations to class-based <see cref="AbpInterceptorBase"/> async interception.
     /// </summary>
-    internal static class AbpInvocationCompileTimeAsyncBridge
+    public static class AbpInvocationCompileTimeAsyncBridge
     {
         public static Task<TResult> InterceptTask<TResult>(
             ref AbpInvocationStruct<Task<TResult>> invocation,
@@ -19,7 +19,7 @@ namespace Abp.Dependency.CompileTime
             }
 
             var bridge = AbpInvocationCompileTime<TResult>.EnsureClassBridge(ref invocation, ref classBridge);
-            ConfigureTaskBridgeProceed(invocation, bridge);
+            ConfigureTaskProceed(invocation, bridge);
 
             if (typeof(TResult) == typeof(AbpUnit))
             {
@@ -44,7 +44,7 @@ namespace Abp.Dependency.CompileTime
             }
 
             var bridge = AbpInvocationCompileTime<TResult>.EnsureClassBridge(ref invocation, ref classBridge);
-            ConfigureValueTaskBridgeProceed(invocation, bridge);
+            ConfigureValueTaskProceed(invocation, bridge);
             var compatibleBridge = new AbpInvocationCompileTimeTaskCompatible(bridge);
 
             if (typeof(TResult) == typeof(AbpUnit))
@@ -59,7 +59,7 @@ namespace Abp.Dependency.CompileTime
             return ResolveValueTaskReturn(bridge);
         }
 
-        private static void ConfigureTaskBridgeProceed<TResult>(
+        public static void ConfigureTaskProceed<TResult>(
             AbpInvocationStruct<Task<TResult>> invocation,
             AbpInvocationCompileTime<TResult> bridge)
         {
@@ -72,7 +72,7 @@ namespace Abp.Dependency.CompileTime
             });
         }
 
-        private static void ConfigureValueTaskBridgeProceed<TResult>(
+        public static void ConfigureValueTaskProceed<TResult>(
             AbpInvocationStruct<ValueTask<TResult>> invocation,
             AbpInvocationCompileTime<TResult> bridge)
         {
@@ -86,7 +86,7 @@ namespace Abp.Dependency.CompileTime
             });
         }
 
-        private static Task<TResult> ResolveTaskReturn<TResult>(AbpInvocationCompileTime<TResult> bridge)
+        public static Task<TResult> ResolveTaskReturn<TResult>(AbpInvocationCompileTime<TResult> bridge)
         {
             if (bridge.ReturnValue is Task<TResult> task)
             {
@@ -102,7 +102,7 @@ namespace Abp.Dependency.CompileTime
                 $"ReturnValue must be Task<{typeof(TResult).FullName}>, but was: {bridge.ReturnValue?.GetType().FullName ?? "null"}.");
         }
 
-        private static ValueTask<TResult> ResolveValueTaskReturn<TResult>(AbpInvocationCompileTime<TResult> bridge)
+        public static ValueTask<TResult> ResolveValueTaskReturn<TResult>(AbpInvocationCompileTime<TResult> bridge)
         {
             if (bridge.ReturnValue is Task<TResult> task)
             {

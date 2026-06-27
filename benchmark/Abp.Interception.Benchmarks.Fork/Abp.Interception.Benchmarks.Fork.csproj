@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\common.props" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Abp.Interception.Benchmarks.Fork</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);Abp.Interception.Benchmarks.Fork.Generated</InterceptorsNamespaces>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Abp.Interception.Benchmarks.Contracts\Abp.Interception.Benchmarks.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Abp\Abp.csproj" />
+    <ProjectReference Include="..\..\src\Abp.SourceGenerators.Runtime\Abp.SourceGenerators.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Abp.SourceGenerators\Abp.SourceGenerators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="$(CompilerGeneratedFilesOutputPath)/**" />
+    <None Include="$(CompilerGeneratedFilesOutputPath)/**" />
+  </ItemGroup>
+</Project>

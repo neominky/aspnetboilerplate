@@ -165,7 +165,7 @@ internal static class AspectAnalyzer
 
         foreach (var method in model.Methods)
         {
-            foreach (var field in GetMethodInterceptorFields(method.Aspect, model.IsApplicationService, userInterceptorFields))
+            foreach (var field in GetMethodInterceptorFields(method.Aspect))
             {
                 if (seen.Add(field.FieldName))
                 {
@@ -177,15 +177,10 @@ internal static class AspectAnalyzer
         return fields.ToImmutableArray();
     }
 
-    public static ImmutableArray<BakedInterceptorField> GetMethodInterceptorFields(
-        AspectModel aspect,
-        bool isApplicationService,
-        ImmutableArray<BakedInterceptorField> userInterceptorFields)
+    public static ImmutableArray<BakedInterceptorField> GetMethodInterceptorFields(AspectModel aspect)
     {
         var builtIn = GetBuiltInInterceptorFields(aspect);
-        var matchingUser = isApplicationService
-            ? userInterceptorFields
-            : aspect.MatchingUserInterceptors;
+        var matchingUser = aspect.MatchingUserInterceptors;
 
         if (matchingUser.IsDefaultOrEmpty)
         {
@@ -283,7 +278,8 @@ internal static class AspectAnalyzer
 
     private static bool ShouldAudit(INamedTypeSymbol type, IMethodSymbol method, ITypeSymbol? applicationServiceSymbol)
     {
-        if (HasAttribute(method, AbpTypeNames.Short.Attributes.DisableAuditing))
+        if (HasAttribute(method, AbpTypeNames.Short.Attributes.DisableAuditing)
+            || HasAttribute(type, AbpTypeNames.Short.Attributes.DisableAuditing))
         {
             return false;
         }
