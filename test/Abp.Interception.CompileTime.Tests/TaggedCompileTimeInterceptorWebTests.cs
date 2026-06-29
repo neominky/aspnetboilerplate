@@ -34,7 +34,7 @@ public class TaggedCompileTimeInterceptorWebTests
     }
 
     [Fact]
-    public async Task Api_hello_task_should_invoke_user_defined_interceptor_via_class_bridge_and_apply_tag()
+    public async Task Api_hello_task_should_invoke_user_defined_interceptor_via_class_invocation_and_apply_tag()
     {
         TaggedCompileTimeInterceptor.ResetForTest();
         StructFastPathCompileTimeInterceptor.ResetForTest();
@@ -50,7 +50,7 @@ public class TaggedCompileTimeInterceptorWebTests
     }
 
     [Fact]
-    public async Task Api_hello_value_task_should_invoke_user_defined_interceptor_via_class_bridge_and_apply_tag()
+    public async Task Api_hello_value_task_should_invoke_user_defined_interceptor_via_class_invocation_and_apply_tag()
     {
         TaggedCompileTimeInterceptor.ResetForTest();
         StructFastPathCompileTimeInterceptor.ResetForTest();

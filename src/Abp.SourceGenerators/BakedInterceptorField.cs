@@ -6,9 +6,9 @@ internal readonly struct BakedInterceptorField
         string fieldName,
         string resolveExpression,
         string? typeName = null,
-        ValueTaskLayerKind valueTaskLayerKind = ValueTaskLayerKind.ClassBridge,
-        TaskLayerKind taskLayerKind = TaskLayerKind.ClassBridge,
-        SyncLayerKind syncLayerKind = SyncLayerKind.ClassBridge)
+        ValueTaskLayerKind valueTaskLayerKind = ValueTaskLayerKind.ClassInvocation,
+        TaskLayerKind taskLayerKind = TaskLayerKind.ClassInvocation,
+        SyncLayerKind syncLayerKind = SyncLayerKind.ClassInvocation)
     {
         FieldName = fieldName;
         ResolveExpression = resolveExpression;

@@ -4,42 +4,6 @@ using Abp.Dependency;
 
 namespace Abp.Dependency.CompileTime
 {
-    /// <summary>
-    /// Presents <see cref="ValueTask"/> proceed results as <see cref="Task"/> for existing Task-based interceptors
-    /// without casting <see cref="ValueTask"/> to <see cref="Task"/>.
-    /// </summary>
-    public sealed class AbpInvocationCompileTimeTaskCompatible : IAbpInvocation
-    {
-        private readonly IAbpInvocation _inner;
-
-        public AbpInvocationCompileTimeTaskCompatible(IAbpInvocation inner)
-        {
-            _inner = inner;
-        }
-
-        public object InvocationTarget => _inner.InvocationTarget;
-
-        public Type TargetType => _inner.TargetType;
-
-        public System.Reflection.MethodInfo MethodInvocationTarget => _inner.MethodInvocationTarget;
-
-        public System.Reflection.MethodInfo Method => _inner.Method;
-
-        public object?[] Arguments => _inner.Arguments;
-
-        public object? ReturnValue
-        {
-            get => AbpInvocationReturnValueMaterializer.MaterializeForTaskCompatibility(_inner);
-            set => _inner.ReturnValue = value;
-        }
-
-        public void Proceed() => _inner.Proceed();
-
-        public IAbpProceedInfo CaptureProceedInfo() => _inner.CaptureProceedInfo();
-
-        public System.Reflection.MethodInfo GetConcreteMethod() => _inner.GetConcreteMethod();
-    }
-
     internal static class AbpInvocationReturnValueMaterializer
     {
         public static object? MaterializeForTaskCompatibility(IAbpInvocation invocation)

@@ -2,6 +2,6 @@ namespace Abp.SourceGenerators;
 
 internal enum SyncLayerKind
 {
-    ClassBridge,
+    ClassInvocation,
     AllocationFreeSync,
 }

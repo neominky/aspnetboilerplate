@@ -15,7 +15,7 @@ public class Startup
 
         return services.AddAbp<InterceptionCompileTimeHostModule>(options =>
         {
-            CompileTimeInterceptionConfiguration.Enable();
+            CompileTimeInterceptionConfiguration.Enable(options.InterceptorOptions);
         });
     }
 

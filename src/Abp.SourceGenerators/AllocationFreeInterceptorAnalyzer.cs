@@ -14,13 +14,13 @@ internal static class AllocationFreeInterceptorAnalyzer
     {
         if (allocationFreeBase == null || !InheritsFrom(interceptorType, allocationFreeBase))
         {
-            return SyncLayerKind.ClassBridge;
+            return SyncLayerKind.ClassInvocation;
         }
 
         var invocationStruct = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.AbpInvocationStruct);
         if (invocationStruct == null)
         {
-            return SyncLayerKind.ClassBridge;
+            return SyncLayerKind.ClassInvocation;
         }
 
         if (OverridesStructSyncIntercept(interceptorType, allocationFreeBase, invocationStruct))
@@ -28,7 +28,7 @@ internal static class AllocationFreeInterceptorAnalyzer
             return SyncLayerKind.AllocationFreeSync;
         }
 
-        return SyncLayerKind.ClassBridge;
+        return SyncLayerKind.ClassInvocation;
     }
 
     public static ValueTaskLayerKind ResolveValueTaskLayerKind(
@@ -38,7 +38,7 @@ internal static class AllocationFreeInterceptorAnalyzer
     {
         if (allocationFreeBase == null || !InheritsFrom(interceptorType, allocationFreeBase))
         {
-            return ValueTaskLayerKind.ClassBridge;
+            return ValueTaskLayerKind.ClassInvocation;
         }
 
         var invocationStruct = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.AbpInvocationStructOpen);
@@ -47,7 +47,7 @@ internal static class AllocationFreeInterceptorAnalyzer
 
         if (invocationStruct == null || valueTaskGeneric == null || taskGeneric == null)
         {
-            return ValueTaskLayerKind.ClassBridge;
+            return ValueTaskLayerKind.ClassInvocation;
         }
 
         if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, valueTaskGeneric))
@@ -60,7 +60,7 @@ internal static class AllocationFreeInterceptorAnalyzer
             return ValueTaskLayerKind.AllocationFreeTaskBridge;
         }
 
-        return ValueTaskLayerKind.ClassBridge;
+        return ValueTaskLayerKind.ClassInvocation;
     }
 
     public static TaskLayerKind ResolveTaskLayerKind(
@@ -70,7 +70,7 @@ internal static class AllocationFreeInterceptorAnalyzer
     {
         if (allocationFreeBase == null || !InheritsFrom(interceptorType, allocationFreeBase))
         {
-            return TaskLayerKind.ClassBridge;
+            return TaskLayerKind.ClassInvocation;
         }
 
         var invocationStruct = compilation.GetTypeByMetadataName(AbpTypeNames.Metadata.AbpInvocationStructOpen);
@@ -78,7 +78,7 @@ internal static class AllocationFreeInterceptorAnalyzer
 
         if (invocationStruct == null || taskGeneric == null)
         {
-            return TaskLayerKind.ClassBridge;
+            return TaskLayerKind.ClassInvocation;
         }
 
         if (OverridesStructIntercept(interceptorType, allocationFreeBase, invocationStruct, taskGeneric))
@@ -86,7 +86,7 @@ internal static class AllocationFreeInterceptorAnalyzer
             return TaskLayerKind.AllocationFreeTask;
         }
 
-        return TaskLayerKind.ClassBridge;
+        return TaskLayerKind.ClassInvocation;
     }
 
     private static bool OverridesStructSyncIntercept(

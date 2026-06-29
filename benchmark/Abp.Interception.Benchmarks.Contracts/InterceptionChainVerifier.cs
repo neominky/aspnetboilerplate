@@ -16,13 +16,13 @@ public static class InterceptionChainVerifier
             () => (BenchmarkInterceptorCounters.NuGet1, BenchmarkInterceptorCounters.NuGet2, BenchmarkInterceptorCounters.NuGet3));
     }
 
-    public static void VerifyClassBridge(IBenchmarkComparisonAppService appService, string scenarioName)
+    public static void VerifyClassInvocation(IBenchmarkComparisonAppService appService, string scenarioName)
     {
         Verify(
             appService,
             scenarioName,
             requireCastleProxy: false,
-            () => (BenchmarkInterceptorCounters.ClassBridge1, BenchmarkInterceptorCounters.ClassBridge2, BenchmarkInterceptorCounters.ClassBridge3));
+            () => (BenchmarkInterceptorCounters.ClassInvocation1, BenchmarkInterceptorCounters.ClassInvocation2, BenchmarkInterceptorCounters.ClassInvocation3));
     }
 
     public static void VerifyAllocationFree(IBenchmarkComparisonAppService appService, string scenarioName)

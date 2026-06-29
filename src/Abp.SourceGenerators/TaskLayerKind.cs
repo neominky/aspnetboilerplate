@@ -2,6 +2,6 @@ namespace Abp.SourceGenerators;
 
 internal enum TaskLayerKind
 {
-    ClassBridge,
+    ClassInvocation,
     AllocationFreeTask,
 }

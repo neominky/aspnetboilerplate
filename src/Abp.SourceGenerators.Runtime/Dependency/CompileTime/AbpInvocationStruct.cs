@@ -5,6 +5,10 @@ using Abp.Dependency;
 
 namespace Abp.Dependency.CompileTime
 {
+    public delegate void AbpSyncChainStepDelegate(ref AbpInvocationStruct invocation);
+
+    public delegate TAsync AbpAsyncChainStepDelegate<TAsync>(ref AbpInvocationStruct<TAsync> invocation);
+
     /// <summary>
     /// Compatibility handle for porting <see cref="IAbpInvocation.CaptureProceedInfo"/> call sites to struct interception.
     /// Not required for new code — use <see cref="AbpInvocationStruct.Proceed"/> (fast path) on the sync path instead.
@@ -48,6 +52,8 @@ namespace Abp.Dependency.CompileTime
     public struct AbpInvocationStruct
     {
         private Func<object?>? _proceedSync;
+        private AbpSyncChainStepDelegate[]? _syncChain;
+        private int _chainIndex;
 
         public object InvocationTarget { get; private set; }
 
@@ -63,6 +69,8 @@ namespace Abp.Dependency.CompileTime
 
         public object? ReturnValue { get; set; }
 
+        public AbpInvocationCompileTime? ClassInvocation { get; set; }
+
         public void Initialize(
             object invocationTarget,
             in AbpInvocationMethod invocationMethod,
@@ -72,11 +80,25 @@ namespace Abp.Dependency.CompileTime
             InvocationMethod = invocationMethod;
             TargetType = invocationMethod.Method.DeclaringType!;
             Arguments = arguments;
+            ReturnValue = null;
+            ClassInvocation = null;
+            _chainIndex = 0;
+            _proceedSync = null;
+            _syncChain = null;
+        }
+
+        public void BeginSyncChain(AbpSyncChainStepDelegate[] chain)
+        {
+            _syncChain = chain;
+            _chainIndex = 0;
+            _proceedSync = null;
         }
 
         public void SetSyncProceed(Func<object?> proceed)
         {
             _proceedSync = proceed;
+            _syncChain = null;
+            _chainIndex = 0;
         }
 
         /// <summary>
@@ -85,12 +107,23 @@ namespace Abp.Dependency.CompileTime
         /// </summary>
         public AbpStructSyncProceedInfo CaptureProceedInfo()
         {
-            if (_proceedSync == null)
+            if (_proceedSync != null)
             {
-                throw new InvalidOperationException("Proceed is not configured.");
+                return new AbpStructSyncProceedInfo(_proceedSync);
             }
 
-            return new AbpStructSyncProceedInfo(_proceedSync);
+            if (_syncChain != null)
+            {
+                var chain = _syncChain;
+                AbpInvocationStruct self = this;
+                return new AbpStructSyncProceedInfo(() =>
+                {
+                    self.ProceedChainStep(chain);
+                    return self.ReturnValue;
+                });
+            }
+
+            throw new InvalidOperationException("Proceed is not configured.");
         }
 
         /// <summary>
@@ -98,12 +131,28 @@ namespace Abp.Dependency.CompileTime
         /// </summary>
         public void Proceed()
         {
+            if (_syncChain != null)
+            {
+                ProceedChainStep(_syncChain);
+                return;
+            }
+
             if (_proceedSync == null)
             {
                 throw new InvalidOperationException("Proceed is not configured.");
             }
 
             ReturnValue = _proceedSync();
+        }
+
+        private void ProceedChainStep(AbpSyncChainStepDelegate[] chain)
+        {
+            if (_chainIndex >= chain.Length)
+            {
+                throw new InvalidOperationException("Compile-time sync chain exceeded.");
+            }
+
+            chain[_chainIndex++](ref this);
         }
     }
 
@@ -120,6 +169,8 @@ namespace Abp.Dependency.CompileTime
     public struct AbpInvocationStruct<TAsync>
     {
         private Func<TAsync>? _proceed;
+        private AbpAsyncChainStepDelegate<TAsync>[]? _asyncChain;
+        private int _chainIndex;
 
         public object InvocationTarget { get; private set; }
 
@@ -139,6 +190,8 @@ namespace Abp.Dependency.CompileTime
         /// </summary>
         public TAsync ReturnValue { get; set; }
 
+        public AbpInvocationCompileTime? ClassInvocation { get; set; }
+
         public void Initialize(
             object invocationTarget,
             in AbpInvocationMethod invocationMethod,
@@ -148,11 +201,25 @@ namespace Abp.Dependency.CompileTime
             InvocationMethod = invocationMethod;
             TargetType = invocationMethod.Method.DeclaringType!;
             Arguments = arguments;
+            ReturnValue = default!;
+            ClassInvocation = null;
+            _chainIndex = 0;
+            _proceed = null;
+            _asyncChain = null;
+        }
+
+        public void BeginAsyncChain(AbpAsyncChainStepDelegate<TAsync>[] chain)
+        {
+            _asyncChain = chain;
+            _chainIndex = 0;
+            _proceed = null;
         }
 
         public void SetProceed(Func<TAsync> proceed)
         {
             _proceed = proceed;
+            _asyncChain = null;
+            _chainIndex = 0;
         }
 
         /// <summary>
@@ -161,12 +228,23 @@ namespace Abp.Dependency.CompileTime
         /// </summary>
         public AbpStructProceedInfo<TAsync> CaptureProceedInfo()
         {
-            if (_proceed == null)
+            if (_proceed != null)
             {
-                throw new InvalidOperationException("Proceed is not configured.");
+                return new AbpStructProceedInfo<TAsync>(_proceed);
             }
 
-            return new AbpStructProceedInfo<TAsync>(_proceed);
+            if (_asyncChain != null)
+            {
+                var chain = _asyncChain;
+                AbpInvocationStruct<TAsync> self = this;
+                return new AbpStructProceedInfo<TAsync>(() =>
+                {
+                    self.ReturnValue = self.ProceedChainStep(chain);
+                    return self.ReturnValue;
+                });
+            }
+
+            throw new InvalidOperationException("Proceed is not configured.");
         }
 
         /// <summary>
@@ -174,12 +252,28 @@ namespace Abp.Dependency.CompileTime
         /// </summary>
         public TAsync Proceed()
         {
+            if (_asyncChain != null)
+            {
+                ReturnValue = ProceedChainStep(_asyncChain);
+                return ReturnValue;
+            }
+
             if (_proceed == null)
             {
                 throw new InvalidOperationException("Proceed is not configured.");
             }
 
             return _proceed();
+        }
+
+        private TAsync ProceedChainStep(AbpAsyncChainStepDelegate<TAsync>[] chain)
+        {
+            if (_chainIndex >= chain.Length)
+            {
+                throw new InvalidOperationException("Compile-time async chain exceeded.");
+            }
+
+            return chain[_chainIndex++](ref this);
         }
     }
 }

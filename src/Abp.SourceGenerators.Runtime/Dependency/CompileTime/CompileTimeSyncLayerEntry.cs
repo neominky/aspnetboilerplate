@@ -5,19 +5,19 @@ namespace Abp.Dependency.CompileTime
     /// <summary>
     /// One sync interceptor layer baked at compile time. Stored in a cached array;
     /// use <see cref="CompileTimeSyncLayerList.AsSpan"/> for stack-friendly iteration.
-    /// Exactly one of <see cref="ClassBridge"/> or <see cref="AllocationFree"/> is set.
+    /// Exactly one of <see cref="ClassInterceptor"/> or <see cref="AllocationFree"/> is set.
     /// </summary>
     public readonly struct CompileTimeSyncLayerEntry
     {
         public CompileTimeSyncLayerEntry(
-            AbpInterceptorBase? classBridge,
+            AbpInterceptorBase? classInterceptor,
             IAbpInterceptorSync? allocationFree)
         {
-            ClassBridge = classBridge;
+            ClassInterceptor = classInterceptor;
             AllocationFree = allocationFree;
         }
 
-        public AbpInterceptorBase? ClassBridge { get; }
+        public AbpInterceptorBase? ClassInterceptor { get; }
 
         public IAbpInterceptorSync? AllocationFree { get; }
     }

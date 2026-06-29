@@ -73,31 +73,19 @@ internal static class InterceptorEmitter
             builder.AppendLine($"    private readonly {AbpTypeNames.FullyQualified.AbpInterceptorBase} {interceptor.FieldName};");
         }
 
-        var syncChainMethods = model.Methods
-            .Where(m => !m.IsAsync && !AspectAnalyzer.GetMethodInterceptorFields(m.Aspect).IsDefaultOrEmpty)
-            .ToImmutableArray();
-        var asyncChainMethods = model.Methods
-            .Where(m => m.IsAsync && !AspectAnalyzer.GetMethodInterceptorFields(m.Aspect).IsDefaultOrEmpty)
+        var interceptedMethods = model.Methods
+            .Where(m => !AspectAnalyzer.GetMethodInterceptorFields(m.Aspect).IsDefaultOrEmpty)
             .ToImmutableArray();
 
-        if (!syncChainMethods.IsEmpty)
+        foreach (var method in interceptedMethods)
         {
-            builder.AppendLine($"    private readonly {AbpTypeNames.FullyQualified.SyncInvocationState} _syncInvocationState = new();");
-            builder.AppendLine();
-
-            foreach (var method in syncChainMethods)
-            {
-                EmitSyncProceedFields(builder, method, AspectAnalyzer.GetMethodInterceptorFields(method.Aspect));
-            }
+            var interceptors = AspectAnalyzer.GetMethodInterceptorFields(method.Aspect);
+            EmitLayerMethods(builder, method, interceptors);
+            EmitBakedClassProceedFields(builder, method, interceptors);
+            EmitChainArrayField(builder, method, interceptors);
         }
 
-        foreach (var method in asyncChainMethods)
-        {
-            EmitAsyncInvocationFields(builder, method);
-            EmitAsyncProceedFields(builder, method, AspectAnalyzer.GetMethodInterceptorFields(method.Aspect));
-        }
-
-        if (!asyncChainMethods.IsEmpty)
+        if (!interceptedMethods.IsEmpty)
         {
             builder.AppendLine();
         }
@@ -125,28 +113,15 @@ internal static class InterceptorEmitter
             builder.AppendLine($"        {interceptor.FieldName} = {interceptor.ResolveExpression};");
         }
 
-        foreach (var method in syncChainMethods)
+        foreach (var method in interceptedMethods)
         {
-            EmitSyncProceedCtorAssignments(builder, method, AspectAnalyzer.GetMethodInterceptorFields(method.Aspect));
-        }
-
-        foreach (var method in asyncChainMethods)
-        {
-            EmitAsyncProceedCtorAssignments(builder, method, AspectAnalyzer.GetMethodInterceptorFields(method.Aspect));
+            var interceptors = AspectAnalyzer.GetMethodInterceptorFields(method.Aspect);
+            EmitBakedClassProceedCtorAssignments(builder, method, interceptors);
+            EmitChainArrayCtorAssignment(builder, method, interceptors);
         }
 
         builder.AppendLine("    }");
         builder.AppendLine();
-
-        foreach (var method in syncChainMethods)
-        {
-            EmitSyncProceedMethods(builder, method, AspectAnalyzer.GetMethodInterceptorFields(method.Aspect));
-        }
-
-        foreach (var method in asyncChainMethods)
-        {
-            EmitAsyncProceedMethods(builder, method, AspectAnalyzer.GetMethodInterceptorFields(method.Aspect));
-        }
 
         foreach (var method in model.Methods)
         {
@@ -186,28 +161,6 @@ internal static class InterceptorEmitter
         builder.AppendLine($"    public {method.ReturnType} {method.Signature}");
         builder.AppendLine("    {");
 
-        if (useValueTaskMethod)
-        {
-            if (interceptors.IsDefaultOrEmpty)
-            {
-                EmitAsyncInvocationSetup(builder, method, isTask: false);
-            }
-        }
-        else if (useTaskStructMethod)
-        {
-            if (interceptors.IsDefaultOrEmpty)
-            {
-                EmitAsyncInvocationSetup(builder, method, isTask: true);
-            }
-        }
-        else if (!method.IsAsync)
-        {
-            if (interceptors.IsDefaultOrEmpty)
-            {
-                EmitAbpInvocationStructSetup(builder, method, interceptors);
-            }
-        }
-
         EmitLinearInterceptorChain(
             builder,
             method,
@@ -217,43 +170,6 @@ internal static class InterceptorEmitter
             useTaskStructMethod);
         builder.AppendLine("    }");
         builder.AppendLine();
-    }
-
-    private static void EmitAbpInvocationStructSetup(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        var argumentsExpression = method.ArgumentList.Length == 0
-            ? "global::System.Array.Empty<object?>()"
-            : $"new object?[] {{ {method.ArgumentList} }}";
-
-        var invocationMethodExpression = GetInvocationMethodExpression(method);
-        builder.AppendLine($"        var invocation = default({AbpTypeNames.FullyQualified.AbpInvocationStruct});");
-        builder.AppendLine($"        invocation.Initialize(_inner, {invocationMethodExpression}, {argumentsExpression});");
-
-        if (MethodUsesSyncClassBridge(interceptors))
-        {
-            builder.AppendLine($"        {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}? classBridge = null;");
-        }
-    }
-
-    private static void EmitAsyncInvocationSetup(StringBuilder builder, MethodModel method, bool isTask)
-    {
-        var argumentsExpression = method.ArgumentList.Length == 0
-            ? "global::System.Array.Empty<object?>()"
-            : $"new object?[] {{ {method.ArgumentList} }}";
-
-        var invocationType = GetAsyncInvocationTypeName(method, isTask);
-        var invocationMethodExpression = GetInvocationMethodExpression(method);
-        builder.AppendLine($"        var invocation = default({invocationType});");
-        builder.AppendLine($"        invocation.Initialize(_inner, {invocationMethodExpression}, {argumentsExpression});");
-        builder.AppendLine($"        {GetAsyncClassBridgeTypeName(method)} classBridge = null;");
-    }
-
-    private static string GetAsyncClassBridgeTypeName(MethodModel method)
-    {
-        return $"{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{GetAsyncResultTypeName(method.ReturnType)}>?";
     }
 
     private static void EmitLinearInterceptorChain(
@@ -276,30 +192,50 @@ internal static class InterceptorEmitter
             return;
         }
 
+
         if (!method.IsAsync)
         {
-            EmitCachedSyncChainEntry(builder, method, interceptors, innerCallExpression);
-
-            if (method.ReturnType == "void")
-            {
-                return;
-            }
-
-            builder.AppendLine($"        return ({method.ReturnType})_syncInvocationState.Invocation.ReturnValue!;");
+            EmitSyncChainEntry(builder, method, innerCallExpression, interceptors);
             return;
         }
 
         if (useValueTaskMethod)
         {
-            EmitCachedValueTaskChainEntry(builder, method, interceptors, innerCallExpression);
+            EmitAsyncChainEntry(builder, method, interceptors, isTask: false, innerCallExpression);
             return;
         }
 
         if (useTaskStructMethod)
         {
-            EmitCachedTaskChainEntry(builder, method, interceptors, innerCallExpression);
+            EmitAsyncChainEntry(builder, method, interceptors, isTask: true, innerCallExpression);
         }
     }
+
+    private static bool IsAllClassInvocationSync(ImmutableArray<BakedInterceptorField> interceptors) =>
+        !interceptors.IsDefaultOrEmpty
+        && interceptors.All(i => i.SyncLayerKind == SyncLayerKind.ClassInvocation);
+
+    private static bool IsMixedSync(ImmutableArray<BakedInterceptorField> interceptors) =>
+        NeedsSyncClassInvocation(interceptors)
+        && interceptors.Any(i => i.SyncLayerKind == SyncLayerKind.AllocationFreeSync);
+
+    private static bool IsAllClassInvocationTask(ImmutableArray<BakedInterceptorField> interceptors) =>
+        !interceptors.IsDefaultOrEmpty
+        && interceptors.All(i => i.TaskLayerKind == TaskLayerKind.ClassInvocation);
+
+    private static bool IsMixedTask(ImmutableArray<BakedInterceptorField> interceptors) =>
+        NeedsTaskClassInvocation(interceptors)
+        && interceptors.Any(i => i.TaskLayerKind == TaskLayerKind.AllocationFreeTask);
+
+    private static bool IsAllClassInvocationValueTask(ImmutableArray<BakedInterceptorField> interceptors) =>
+        !interceptors.IsDefaultOrEmpty
+        && interceptors.All(i => i.ValueTaskLayerKind == ValueTaskLayerKind.ClassInvocation);
+
+    private static bool IsMixedValueTask(ImmutableArray<BakedInterceptorField> interceptors) =>
+        NeedsValueTaskClassInvocation(interceptors)
+        && interceptors.Any(i =>
+            i.ValueTaskLayerKind == ValueTaskLayerKind.AllocationFreeValueTask
+            || i.ValueTaskLayerKind == ValueTaskLayerKind.AllocationFreeTaskBridge);
 
     private static string GetMethodPrefix(MethodModel method)
     {
@@ -309,460 +245,1368 @@ internal static class InterceptorEmitter
             : methodFieldName;
     }
 
-    private static string GetSyncProceedTailField(string methodPrefix) => $"_{char.ToLowerInvariant(methodPrefix[0])}{methodPrefix.Substring(1)}SyncProceedTail";
+    private static string GetSyncChainFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}SyncChain";
 
-    private static string GetSyncProceedStepField(string methodPrefix, int step) =>
-        $"_{char.ToLowerInvariant(methodPrefix[0])}{methodPrefix.Substring(1)}SyncProceedStep{step}";
+    private static string GetTaskChainFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}TaskChain";
 
-    private static string GetSyncProceedTailMethodName(string methodPrefix) => $"{methodPrefix}_SyncProceedTail";
+    private static string GetValueTaskChainFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}ValueTaskChain";
 
-    private static string GetSyncProceedStepMethodName(string methodPrefix, int step) => $"{methodPrefix}_SyncProceedStep{step}";
+    private static string GetSyncLayerMethodName(MethodModel method, int index) =>
+        $"{GetMethodPrefix(method)}_SyncLayer{index}";
 
-    private static string BuildDeferredInnerCallExpression(MethodModel method)
+    private static string GetSyncTailMethodName(MethodModel method) =>
+        $"{GetMethodPrefix(method)}_SyncTail";
+
+    private static string GetTaskLayerMethodName(MethodModel method, int index) =>
+        $"{GetMethodPrefix(method)}_TaskLayer{index}";
+
+    private static string GetTaskTailMethodName(MethodModel method) =>
+        $"{GetMethodPrefix(method)}_TaskTail";
+
+    private static string GetValueTaskLayerMethodName(MethodModel method, int index) =>
+        $"{GetMethodPrefix(method)}_ValueTaskLayer{index}";
+
+    private static string GetValueTaskTailMethodName(MethodModel method) =>
+        $"{GetMethodPrefix(method)}_ValueTaskTail";
+
+    private const string ClassInvocationVarName = "classInvocation";
+    private const string MixedStructHolderVarName = "mixedStructHolder";
+
+    private static string GetPoolTypeName() => AbpTypeNames.FullyQualified.CompileTimeInvocationPool;
+
+    private static string GetStructHolderTypeName() => AbpTypeNames.FullyQualified.AbpInvocationStructHolder;
+
+    private static string GetClassInvocationVarName() => ClassInvocationVarName;
+
+    private static string GetScopeTypeName() => AbpTypeNames.FullyQualified.CompileTimeInvocationScope;
+
+    private static string GetActiveScopeExpression() => $"{GetScopeTypeName()}.Active!";
+
+    private static string GetScopeClassInvocationExpression(MethodModel method, bool isAsync, bool isTask)
     {
-        if (method.Parameters.IsDefaultOrEmpty)
+        if (!isAsync)
         {
-            return $"_inner.{method.Name}()";
+            return GetClassInvocationVarName();
         }
 
-        var args = string.Join(", ", method.Parameters.Select(p =>
-            $"({p.TypeName})_syncInvocationState.Invocation.Arguments[{p.Position}]!"));
-        return $"_inner.{method.Name}({args})";
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        return $"({AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}>){GetActiveScopeExpression()}.ClassInvocation!";
     }
 
-    private static void EmitSyncProceedFields(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        builder.AppendLine($"    private readonly global::System.Func<object?> {GetSyncProceedTailField(methodPrefix)};");
-        for (var step = 1; step < interceptors.Length; step++)
-        {
-            builder.AppendLine($"    private readonly global::System.Func<object?> {GetSyncProceedStepField(methodPrefix, step)};");
-        }
+    private static string GetScopeSyncStructExpression() => "scope.SyncStruct";
 
-        builder.AppendLine();
-    }
+    private static string GetActiveSyncStructExpression() => $"{GetActiveScopeExpression()}.SyncStruct";
 
-    private static void EmitSyncProceedCtorAssignments(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        builder.AppendLine($"        {GetSyncProceedTailField(methodPrefix)} = {GetSyncProceedTailMethodName(methodPrefix)};");
-        for (var step = 1; step < interceptors.Length; step++)
-        {
-            builder.AppendLine($"        {GetSyncProceedStepField(methodPrefix, step)} = {GetSyncProceedStepMethodName(methodPrefix, step)};");
-        }
-    }
+    private static string GetRentSyncClassInvocationExpression(MethodModel method) =>
+        $"{GetPoolTypeName()}.Rent(_inner, {GetMethodFieldName(method)}, {GetArgumentsExpression(method)})";
 
-    private static void EmitSyncProceedMethods(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        var tailField = GetSyncProceedTailField(methodPrefix);
-        var innerCallExpression = BuildDeferredInnerCallExpression(method);
-
-        builder.AppendLine($"    private object? {GetSyncProceedTailMethodName(methodPrefix)}()");
-        builder.AppendLine("    {");
-        if (method.ReturnType == "void")
-        {
-            builder.AppendLine($"        {innerCallExpression};");
-        }
-        else
-        {
-            builder.AppendLine($"        _syncInvocationState.Invocation.ReturnValue = {innerCallExpression};");
-        }
-
-        builder.AppendLine("        return _syncInvocationState.Invocation.ReturnValue;");
-        builder.AppendLine("    }");
-        builder.AppendLine();
-
-        for (var step = interceptors.Length - 1; step >= 1; step--)
-        {
-            var nextField = step == interceptors.Length - 1
-                ? tailField
-                : GetSyncProceedStepField(methodPrefix, step + 1);
-
-            builder.AppendLine($"    private object? {GetSyncProceedStepMethodName(methodPrefix, step)}()");
-            builder.AppendLine("    {");
-            EmitDirectSyncInterceptorCall(builder, interceptors[step], nextField);
-            builder.AppendLine("        return _syncInvocationState.Invocation.ReturnValue;");
-            builder.AppendLine("    }");
-            builder.AppendLine();
-        }
-    }
-
-    private static void EmitDirectSyncInterceptorCall(
-        StringBuilder builder,
-        BakedInterceptorField interceptor,
-        string nextProceedField)
-    {
-        builder.AppendLine("        ref var invocation = ref _syncInvocationState.Invocation;");
-
-        if (interceptor.SyncLayerKind == SyncLayerKind.AllocationFreeSync)
-        {
-            builder.AppendLine($"        invocation.SetSyncProceed({nextProceedField});");
-            builder.AppendLine($"        {GetSyncInterceptorExpression(interceptor)}.InterceptSynchronous(ref invocation);");
-            return;
-        }
-
-        builder.AppendLine($"        invocation.SetSyncProceed({nextProceedField});");
-        builder.AppendLine($"        var bridge = {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}.EnsureClassBridge(ref invocation, ref _syncInvocationState.ClassBridge);");
-        builder.AppendLine($"        bridge.SetSyncProceed({nextProceedField});");
-        builder.AppendLine($"        {interceptor.FieldName}.InterceptSynchronous(bridge);");
-        builder.AppendLine("        invocation.ReturnValue = bridge.ReturnValue ?? invocation.ReturnValue;");
-    }
-
-    private static void EmitCachedSyncChainEntry(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors,
-        string innerCallExpression)
-    {
-        if (interceptors.IsDefaultOrEmpty)
-        {
-            if (method.ReturnType == "void")
-            {
-                builder.AppendLine($"        {innerCallExpression};");
-            }
-            else
-            {
-                builder.AppendLine($"        return {innerCallExpression};");
-            }
-
-            return;
-        }
-
-        var methodPrefix = GetMethodPrefix(method);
-        var argumentsExpression = method.ArgumentList.Length == 0
-            ? "global::System.Array.Empty<object?>()"
-            : $"new object?[] {{ {method.ArgumentList} }}";
-
-        builder.AppendLine($"        _syncInvocationState.Reset(_inner, {GetInvocationMethodExpression(method)}, {argumentsExpression});");
-
-        var entryNext = interceptors.Length == 1
-            ? GetSyncProceedTailField(methodPrefix)
-            : GetSyncProceedStepField(methodPrefix, 1);
-
-        EmitDirectSyncInterceptorCall(builder, interceptors[0], entryNext);
-    }
-
-    private static string GetAsyncInvocationFieldName(string methodPrefix) =>
-        $"_{char.ToLowerInvariant(methodPrefix[0])}{methodPrefix.Substring(1)}Invocation";
-
-    private static string GetAsyncClassBridgeFieldName(string methodPrefix) =>
-        $"_{char.ToLowerInvariant(methodPrefix[0])}{methodPrefix.Substring(1)}ClassBridge";
-
-    private static string GetAsyncProceedTailField(string methodPrefix) =>
-        $"_{char.ToLowerInvariant(methodPrefix[0])}{methodPrefix.Substring(1)}ProceedTail";
-
-    private static string GetAsyncProceedStepField(string methodPrefix, int step) =>
-        $"_{char.ToLowerInvariant(methodPrefix[0])}{methodPrefix.Substring(1)}ProceedStep{step}";
-
-    private static string GetAsyncProceedTailMethodName(string methodPrefix) => $"{methodPrefix}_ProceedTail";
-
-    private static string GetAsyncProceedStepMethodName(string methodPrefix, int step) => $"{methodPrefix}_ProceedStep{step}";
-
-    private static string GetAsyncProceedFuncType(MethodModel method, bool isTask)
+    private static string GetRentAsyncClassInvocationExpression(MethodModel method)
     {
         var resultType = GetAsyncResultTypeName(method.ReturnType);
-        var asyncPrefix = isTask
+        return $"{GetPoolTypeName()}.Rent<{resultType}>(_inner, {GetMethodFieldName(method)}, {GetArgumentsExpression(method)}, wrapMethodWithMetadata: false)";
+    }
+
+    private static string GetAsyncStructHolderTypeName(MethodModel method, bool isTask) =>
+        $"{GetScopeTypeName()}.AsyncStructHolder<{GetAsyncChainElementTypeName(method, isTask)}>";
+
+    private static string GetAsyncStructHolderValueExpression(MethodModel method, bool isTask) =>
+        $"(({GetAsyncStructHolderTypeName(method, isTask)}){GetActiveScopeExpression()}.AsyncHolder!).Value";
+
+    private static void EmitPooledClassInvocationBlockStart(StringBuilder builder, string rentExpression)
+    {
+        builder.AppendLine($"        var {GetClassInvocationVarName()} = {rentExpression};");
+        builder.AppendLine("        try");
+        builder.AppendLine("        {");
+    }
+
+    private static void EmitPooledClassInvocationBlockEnd(StringBuilder builder)
+    {
+        builder.AppendLine("        }");
+        builder.AppendLine("        finally");
+        builder.AppendLine("        {");
+        builder.AppendLine($"            {GetPoolTypeName()}.Return({GetClassInvocationVarName()});");
+        builder.AppendLine("        }");
+    }
+
+    private static void EmitInvocationScopeBlockStart(StringBuilder builder)
+    {
+        builder.AppendLine($"        using ({GetScopeTypeName()} scope = {GetScopeTypeName()}.Begin())");
+        builder.AppendLine("        {");
+    }
+
+    private static void EmitAsyncScopedPooledInvocationStart(StringBuilder builder, MethodModel method)
+    {
+        EmitInvocationScopeBlockStart(builder);
+        builder.AppendLine($"            scope.ClassInvocation = {GetRentAsyncClassInvocationExpression(method)};");
+        builder.AppendLine("            try");
+        builder.AppendLine("            {");
+    }
+
+    private static void EmitAsyncScopedPooledInvocationEnd(StringBuilder builder)
+    {
+        builder.AppendLine("            }");
+        builder.AppendLine("            finally");
+        builder.AppendLine("            {");
+        builder.AppendLine("                if (scope.ClassInvocation != null)");
+        builder.AppendLine("                {");
+        builder.AppendLine($"                    {GetPoolTypeName()}.Return(scope.ClassInvocation);");
+        builder.AppendLine("                    scope.ClassInvocation = null;");
+        builder.AppendLine("                }");
+        builder.AppendLine("            }");
+        builder.AppendLine("        }");
+    }
+
+    private static string GetAsyncChainElementTypeName(MethodModel method, bool isTask)
+    {
+        var asyncTypePrefix = isTask
             ? "global::System.Threading.Tasks.Task"
             : "global::System.Threading.Tasks.ValueTask";
-        return $"global::System.Func<{asyncPrefix}<{resultType}>>";
+
+        return $"{asyncTypePrefix}<{GetAsyncResultTypeName(method.ReturnType)}>";
     }
 
-    private static void EmitAsyncInvocationFields(StringBuilder builder, MethodModel method)
+    private static string GetSyncClassInvocationFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}ClassInvocation";
+
+    private static string GetTaskClassInvocationFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}TaskClassInvocation";
+
+    private static string GetValueTaskClassInvocationFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}ValueTaskClassInvocation";
+
+    private static string GetSyncInvocationSlotFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}SyncInvocationSlot";
+
+    private static string GetTaskInvocationSlotFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}TaskInvocationSlot";
+
+    private static string GetValueTaskInvocationSlotFieldName(MethodModel method) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}ValueTaskInvocationSlot";
+
+    private static string GetSyncClassProceedFieldName(MethodModel method, int classInvocationIndex) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}SyncClassProceed{classInvocationIndex}";
+
+    private static string GetSyncClassProceedMethodName(MethodModel method, int classInvocationIndex) =>
+        $"{GetMethodPrefix(method)}_SyncClassProceed{classInvocationIndex}";
+
+    private static string GetSyncClassLayerMethodName(MethodModel method, int layerIndex) =>
+        $"{GetMethodPrefix(method)}_SyncClassLayer{layerIndex}";
+
+    private static string GetTaskClassProceedFieldName(MethodModel method, int classInvocationIndex) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}TaskClassProceed{classInvocationIndex}";
+
+    private static string GetTaskClassProceedMethodName(MethodModel method, int classInvocationIndex) =>
+        $"{GetMethodPrefix(method)}_TaskClassProceed{classInvocationIndex}";
+
+    private static string GetTaskClassLayerMethodName(MethodModel method, int layerIndex) =>
+        $"{GetMethodPrefix(method)}_TaskClassLayer{layerIndex}";
+
+    private static string GetValueTaskClassProceedFieldName(MethodModel method, int classInvocationIndex) =>
+        $"_{char.ToLowerInvariant(GetMethodPrefix(method)[0])}{GetMethodPrefix(method).Substring(1)}ValueTaskClassProceed{classInvocationIndex}";
+
+    private static string GetValueTaskClassProceedMethodName(MethodModel method, int classInvocationIndex) =>
+        $"{GetMethodPrefix(method)}_ValueTaskClassProceed{classInvocationIndex}";
+
+    private static string GetValueTaskClassLayerMethodName(MethodModel method, int layerIndex) =>
+        $"{GetMethodPrefix(method)}_ValueTaskClassLayer{layerIndex}";
+
+    private static string GetSyncClassTailMethodName(MethodModel method) =>
+        $"{GetMethodPrefix(method)}_SyncClassTail";
+
+    private static string GetTaskClassTailMethodName(MethodModel method) =>
+        $"{GetMethodPrefix(method)}_TaskClassTail";
+
+    private static string GetValueTaskClassTailMethodName(MethodModel method) =>
+        $"{GetMethodPrefix(method)}_ValueTaskClassTail";
+
+    private static int CountSyncClassInvocationLayersBefore(ImmutableArray<BakedInterceptorField> interceptors, int layerIndex)
     {
-        var methodPrefix = GetMethodPrefix(method);
-        var isTask = IsTaskReturnType(method.ReturnType);
-        var invocationType = GetAsyncInvocationTypeName(method, isTask);
-        var resultType = GetAsyncResultTypeName(method.ReturnType);
-
-        builder.AppendLine($"    private {invocationType} {GetAsyncInvocationFieldName(methodPrefix)};");
-        if (MethodUsesAsyncClassBridge(AspectAnalyzer.GetMethodInterceptorFields(method.Aspect)))
+        var count = 0;
+        for (var i = 0; i < layerIndex; i++)
         {
-            builder.AppendLine($"    private {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}>? {GetAsyncClassBridgeFieldName(methodPrefix)};");
-        }
-
-        if (!isTask && MethodUsesValueTaskTaskBridge(AspectAnalyzer.GetMethodInterceptorFields(method.Aspect)))
-        {
-            builder.AppendLine($"    private readonly global::System.Func<global::System.Threading.Tasks.Task<{resultType}>> {GetAsyncValueTaskToTaskProceedField(methodPrefix)};");
-        }
-
-        builder.AppendLine();
-    }
-
-    private static void EmitAsyncProceedFields(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        var isTask = IsTaskReturnType(method.ReturnType);
-        var proceedType = GetAsyncProceedFuncType(method, isTask);
-
-        builder.AppendLine($"    private readonly {proceedType} {GetAsyncProceedTailField(methodPrefix)};");
-        for (var step = 1; step < interceptors.Length; step++)
-        {
-            builder.AppendLine($"    private readonly {proceedType} {GetAsyncProceedStepField(methodPrefix, step)};");
-        }
-
-        builder.AppendLine();
-    }
-
-    private static void EmitAsyncProceedCtorAssignments(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        builder.AppendLine($"        {GetAsyncProceedTailField(methodPrefix)} = {GetAsyncProceedTailMethodName(methodPrefix)};");
-        for (var step = 1; step < interceptors.Length; step++)
-        {
-            builder.AppendLine($"        {GetAsyncProceedStepField(methodPrefix, step)} = {GetAsyncProceedStepMethodName(methodPrefix, step)};");
-        }
-
-        if (!IsTaskReturnType(method.ReturnType)
-            && MethodUsesValueTaskTaskBridge(interceptors))
-        {
-            builder.AppendLine($"        {GetAsyncValueTaskToTaskProceedField(methodPrefix)} = {GetAsyncValueTaskToTaskProceedMethodName(methodPrefix)};");
-        }
-    }
-
-    private static void EmitAsyncProceedMethods(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        var isTask = IsTaskReturnType(method.ReturnType);
-        var resultType = GetAsyncResultTypeName(method.ReturnType);
-        var asyncReturnType = isTask
-            ? $"global::System.Threading.Tasks.Task<{resultType}>"
-            : $"global::System.Threading.Tasks.ValueTask<{resultType}>";
-        var tailInnerCall = BuildDeferredAsyncInnerCallExpression(method, isTask);
-
-        builder.AppendLine($"    private {asyncReturnType} {GetAsyncProceedTailMethodName(methodPrefix)}()");
-        builder.AppendLine("    {");
-        builder.AppendLine($"        return {tailInnerCall};");
-        builder.AppendLine("    }");
-        builder.AppendLine();
-
-        if (!isTask && MethodUsesValueTaskTaskBridge(interceptors))
-        {
-            builder.AppendLine($"    private global::System.Threading.Tasks.Task<{resultType}> {GetAsyncValueTaskToTaskProceedMethodName(methodPrefix)}()");
-            builder.AppendLine("    {");
-            builder.AppendLine($"        return {AbpTypeNames.FullyQualified.AbpInvocationReturnValueMaterializer}.AsTask({GetAsyncInvocationFieldName(methodPrefix)}.Proceed());");
-            builder.AppendLine("    }");
-            builder.AppendLine();
-        }
-
-        for (var step = interceptors.Length - 1; step >= 1; step--)
-        {
-            var nextField = step == interceptors.Length - 1
-                ? GetAsyncProceedTailField(methodPrefix)
-                : GetAsyncProceedStepField(methodPrefix, step + 1);
-
-            builder.AppendLine($"    private {asyncReturnType} {GetAsyncProceedStepMethodName(methodPrefix, step)}()");
-            builder.AppendLine("    {");
-            EmitDirectAsyncInterceptorCall(builder, method, interceptors[step], nextField, isTask);
-            builder.AppendLine("    }");
-            builder.AppendLine();
-        }
-    }
-
-    private static string BuildDeferredAsyncInnerCallExpression(MethodModel method, bool isTask)
-    {
-        if (method.Parameters.IsDefaultOrEmpty)
-        {
-            return $"_inner.{method.Name}()";
-        }
-
-        var invocationField = GetAsyncInvocationFieldName(GetMethodPrefix(method));
-        var args = string.Join(", ", method.Parameters.Select(p =>
-            $"({p.TypeName}){invocationField}.Arguments[{p.Position}]!"));
-        return $"_inner.{method.Name}({args})";
-    }
-
-    private static void EmitAsyncInvocationReset(StringBuilder builder, MethodModel method)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        var argumentsExpression = method.ArgumentList.Length == 0
-            ? "global::System.Array.Empty<object?>()"
-            : $"new object?[] {{ {method.ArgumentList} }}";
-
-        builder.AppendLine($"        {GetAsyncInvocationFieldName(methodPrefix)}.Initialize(_inner, {GetInvocationMethodExpression(method)}, {argumentsExpression});");
-        if (MethodUsesAsyncClassBridge(AspectAnalyzer.GetMethodInterceptorFields(method.Aspect)))
-        {
-            builder.AppendLine($"        {GetAsyncClassBridgeFieldName(methodPrefix)} = null;");
-        }
-    }
-
-    private static void EmitCachedTaskChainEntry(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors,
-        string innerCallExpression)
-    {
-        EmitAsyncInvocationReset(builder, method);
-
-        var methodPrefix = GetMethodPrefix(method);
-        var entryNext = interceptors.Length == 1
-            ? GetAsyncProceedTailField(methodPrefix)
-            : GetAsyncProceedStepField(methodPrefix, 1);
-
-        EmitDirectAsyncInterceptorCall(builder, method, interceptors[0], entryNext, isTask: true, isRoot: true, innerCallExpression);
-    }
-
-    private static void EmitCachedValueTaskChainEntry(
-        StringBuilder builder,
-        MethodModel method,
-        ImmutableArray<BakedInterceptorField> interceptors,
-        string innerCallExpression)
-    {
-        EmitAsyncInvocationReset(builder, method);
-
-        var methodPrefix = GetMethodPrefix(method);
-        var entryNext = interceptors.Length == 1
-            ? GetAsyncProceedTailField(methodPrefix)
-            : GetAsyncProceedStepField(methodPrefix, 1);
-
-        EmitDirectAsyncInterceptorCall(builder, method, interceptors[0], entryNext, isTask: false, isRoot: true, innerCallExpression);
-    }
-
-    private static void EmitDirectAsyncInterceptorCall(
-        StringBuilder builder,
-        MethodModel method,
-        BakedInterceptorField interceptor,
-        string nextProceedField,
-        bool isTask,
-        bool isRoot = false,
-        string? innerCallExpression = null)
-    {
-        var methodPrefix = GetMethodPrefix(method);
-        var invocationField = GetAsyncInvocationFieldName(methodPrefix);
-        var classBridgeField = GetAsyncClassBridgeFieldName(methodPrefix);
-        var resultType = GetAsyncResultTypeName(method.ReturnType);
-        var wrapVoidReturn = isRoot && IsVoidAsyncReturnType(method.ReturnType);
-        var asyncBridge = AbpTypeNames.FullyQualified.AbpInvocationCompileTimeAsyncBridge;
-        var compileTime = AbpTypeNames.FullyQualified.AbpInvocationCompileTime;
-
-        builder.AppendLine($"        ref var invocation = ref {invocationField};");
-        builder.AppendLine($"        invocation.SetProceed({nextProceedField});");
-
-        if (isTask)
-        {
-            if (interceptor.TaskLayerKind == TaskLayerKind.AllocationFreeTask)
+            if (interceptors[i].SyncLayerKind == SyncLayerKind.ClassInvocation)
             {
-                builder.AppendLine($"        var result = {GetTaskInterceptorExpression(interceptor)}.InterceptAsynchronous<{resultType}>(invocation);");
-                EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask);
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int GetLayerIndexForSyncClassInvocation(ImmutableArray<BakedInterceptorField> interceptors, int classInvocationOrdinal)
+    {
+        var count = 0;
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            if (interceptors[i].SyncLayerKind != SyncLayerKind.ClassInvocation)
+            {
+                continue;
+            }
+
+            if (count == classInvocationOrdinal)
+            {
+                return i;
+            }
+
+            count++;
+        }
+
+        throw new InvalidOperationException("Sync class invocation layer index is out of range.");
+    }
+
+    private static int CountTaskClassInvocationLayersBefore(ImmutableArray<BakedInterceptorField> interceptors, int layerIndex)
+    {
+        var count = 0;
+        for (var i = 0; i < layerIndex; i++)
+        {
+            if (interceptors[i].TaskLayerKind == TaskLayerKind.ClassInvocation)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int GetLayerIndexForTaskClassInvocation(ImmutableArray<BakedInterceptorField> interceptors, int classInvocationOrdinal)
+    {
+        var count = 0;
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            if (interceptors[i].TaskLayerKind != TaskLayerKind.ClassInvocation)
+            {
+                continue;
+            }
+
+            if (count == classInvocationOrdinal)
+            {
+                return i;
+            }
+
+            count++;
+        }
+
+        throw new InvalidOperationException("Task class invocation layer index is out of range.");
+    }
+
+    private static int CountValueTaskClassInvocationLayersBefore(ImmutableArray<BakedInterceptorField> interceptors, int layerIndex)
+    {
+        var count = 0;
+        for (var i = 0; i < layerIndex; i++)
+        {
+            if (interceptors[i].ValueTaskLayerKind == ValueTaskLayerKind.ClassInvocation)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int GetLayerIndexForValueTaskClassInvocation(ImmutableArray<BakedInterceptorField> interceptors, int classInvocationOrdinal)
+    {
+        var count = 0;
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            if (interceptors[i].ValueTaskLayerKind != ValueTaskLayerKind.ClassInvocation)
+            {
+                continue;
+            }
+
+            if (count == classInvocationOrdinal)
+            {
+                return i;
+            }
+
+            count++;
+        }
+
+        throw new InvalidOperationException("ValueTask class invocation layer index is out of range.");
+    }
+
+    private static int CountSyncClassInvocationLayers(ImmutableArray<BakedInterceptorField> interceptors) =>
+        interceptors.Count(i => i.SyncLayerKind == SyncLayerKind.ClassInvocation);
+
+    private static int CountTaskClassInvocationLayers(ImmutableArray<BakedInterceptorField> interceptors) =>
+        interceptors.Count(i => i.TaskLayerKind == TaskLayerKind.ClassInvocation);
+
+    private static int CountValueTaskClassInvocationLayers(ImmutableArray<BakedInterceptorField> interceptors) =>
+        interceptors.Count(i => i.ValueTaskLayerKind == ValueTaskLayerKind.ClassInvocation);
+
+    private static void EmitMixedInvocationSlotFields(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (!method.IsAsync)
+        {
+            if (!IsMixedSync(interceptors))
+            {
                 return;
             }
 
-            builder.AppendLine($"        var bridge = {compileTime}<{resultType}>.EnsureClassBridge(ref invocation, ref {classBridgeField});");
-            builder.AppendLine($"        {asyncBridge}.ConfigureTaskProceed(invocation, bridge);");
-            if (resultType == AbpTypeNames.FullyQualified.AbpUnit)
-            {
-                builder.AppendLine($"        {interceptor.FieldName}.InterceptAsynchronous(bridge);");
-            }
-            else
-            {
-                builder.AppendLine($"        {interceptor.FieldName}.InterceptAsynchronous<{resultType}>(bridge);");
-            }
-
-            builder.AppendLine($"        var result = {asyncBridge}.ResolveTaskReturn<{resultType}>(bridge);");
-            EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask);
+            builder.AppendLine($"    private {AbpTypeNames.FullyQualified.AbpInvocationStruct} {GetSyncInvocationSlotFieldName(method)};");
+            builder.AppendLine();
             return;
         }
 
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            if (!IsMixedTask(interceptors))
+            {
+                return;
+            }
+
+            builder.AppendLine($"    private {GetAsyncInvocationTypeName(method, isTask: true)} {GetTaskInvocationSlotFieldName(method)};");
+            builder.AppendLine();
+            return;
+        }
+
+        if (!IsMixedValueTask(interceptors))
+        {
+            return;
+        }
+
+        builder.AppendLine($"    private {GetAsyncInvocationTypeName(method, isTask: false)} {GetValueTaskInvocationSlotFieldName(method)};");
+        builder.AppendLine();
+    }
+
+    private static void EmitBakedClassProceedFields(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (!method.IsAsync)
+        {
+            if (!NeedsSyncClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var classInvocationIndex = 0;
+            for (var i = 0; i < interceptors.Length; i++)
+            {
+                if (interceptors[i].SyncLayerKind != SyncLayerKind.ClassInvocation)
+                {
+                    continue;
+                }
+
+                builder.AppendLine($"    private readonly global::System.Func<{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}, object?> {GetSyncClassProceedFieldName(method, classInvocationIndex)};");
+                classInvocationIndex++;
+            }
+
+            builder.AppendLine();
+            return;
+        }
+
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            if (!NeedsTaskClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var taskResultType = GetAsyncResultTypeName(method.ReturnType);
+            var classInvocationIndex = 0;
+            for (var i = 0; i < interceptors.Length; i++)
+            {
+                if (interceptors[i].TaskLayerKind != TaskLayerKind.ClassInvocation)
+                {
+                    continue;
+                }
+
+                builder.AppendLine($"    private readonly global::System.Func<{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}, global::System.Threading.Tasks.Task<object?>> {GetTaskClassProceedFieldName(method, classInvocationIndex)};");
+                classInvocationIndex++;
+            }
+
+            builder.AppendLine();
+            return;
+        }
+
+        if (!NeedsValueTaskClassInvocation(interceptors))
+        {
+            return;
+        }
+
+        var valueTaskResultType = GetAsyncResultTypeName(method.ReturnType);
+        var valueTaskClassInvocationIndex = 0;
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            if (interceptors[i].ValueTaskLayerKind != ValueTaskLayerKind.ClassInvocation)
+            {
+                continue;
+            }
+
+            builder.AppendLine($"    private readonly global::System.Func<{AbpTypeNames.FullyQualified.AbpInvocationCompileTime}, global::System.Threading.Tasks.Task<object?>> {GetValueTaskClassProceedFieldName(method, valueTaskClassInvocationIndex)};");
+            valueTaskClassInvocationIndex++;
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void EmitBakedClassProceedCtorAssignments(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (!method.IsAsync)
+        {
+            if (!NeedsSyncClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var classInvocationIndex = 0;
+            for (var i = 0; i < interceptors.Length; i++)
+            {
+                if (interceptors[i].SyncLayerKind != SyncLayerKind.ClassInvocation)
+                {
+                    continue;
+                }
+
+                builder.AppendLine($"        {GetSyncClassProceedFieldName(method, classInvocationIndex)} = {GetSyncClassProceedMethodName(method, classInvocationIndex)};");
+                classInvocationIndex++;
+            }
+
+            return;
+        }
+
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            if (!NeedsTaskClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var classInvocationIndex = 0;
+            for (var i = 0; i < interceptors.Length; i++)
+            {
+                if (interceptors[i].TaskLayerKind != TaskLayerKind.ClassInvocation)
+                {
+                    continue;
+                }
+
+                builder.AppendLine($"        {GetTaskClassProceedFieldName(method, classInvocationIndex)} = {GetTaskClassProceedMethodName(method, classInvocationIndex)};");
+                classInvocationIndex++;
+            }
+
+            return;
+        }
+
+        if (!NeedsValueTaskClassInvocation(interceptors))
+        {
+            return;
+        }
+
+        var valueTaskClassInvocationIndex = 0;
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            if (interceptors[i].ValueTaskLayerKind != ValueTaskLayerKind.ClassInvocation)
+            {
+                continue;
+            }
+
+            builder.AppendLine($"        {GetValueTaskClassProceedFieldName(method, valueTaskClassInvocationIndex)} = {GetValueTaskClassProceedMethodName(method, valueTaskClassInvocationIndex)};");
+            valueTaskClassInvocationIndex++;
+        }
+    }
+    private static bool NeedsSyncClassInvocation(ImmutableArray<BakedInterceptorField> interceptors) =>
+        interceptors.Any(i => i.SyncLayerKind == SyncLayerKind.ClassInvocation);
+
+    private static bool NeedsTaskClassInvocation(ImmutableArray<BakedInterceptorField> interceptors) =>
+        interceptors.Any(i => i.TaskLayerKind == TaskLayerKind.ClassInvocation);
+
+    private static bool NeedsValueTaskClassInvocation(ImmutableArray<BakedInterceptorField> interceptors) =>
+        interceptors.Any(i => i.ValueTaskLayerKind == ValueTaskLayerKind.ClassInvocation);
+
+    private static string GetEmptyArgumentsExpression() => "global::System.Array.Empty<object?>()";
+
+    private static void EmitClassInvocationFields(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (!method.IsAsync)
+        {
+            if (!NeedsSyncClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetSyncClassInvocationFieldName(method);
+            builder.AppendLine($"    private readonly {AbpTypeNames.FullyQualified.AbpInvocationCompileTime} {fieldName};");
+            builder.AppendLine();
+            return;
+        }
+
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            if (!NeedsTaskClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetTaskClassInvocationFieldName(method);
+            var resultType = GetAsyncResultTypeName(method.ReturnType);
+            builder.AppendLine($"    private readonly {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}> {fieldName};");
+            builder.AppendLine();
+            return;
+        }
+
+        if (!NeedsValueTaskClassInvocation(interceptors))
+        {
+            return;
+        }
+
+        var valueTaskFieldName = GetValueTaskClassInvocationFieldName(method);
+        var valueTaskResultType = GetAsyncResultTypeName(method.ReturnType);
+        builder.AppendLine($"    private readonly {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{valueTaskResultType}> {valueTaskFieldName};");
+        builder.AppendLine();
+    }
+
+    private static void EmitClassInvocationCtorAssignment(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        var methodField = GetMethodFieldName(method);
+        var emptyArgs = GetEmptyArgumentsExpression();
+
+        if (!method.IsAsync)
+        {
+            if (!NeedsSyncClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetSyncClassInvocationFieldName(method);
+            builder.AppendLine($"        {fieldName} = new {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}(_inner, {methodField}, {emptyArgs});");
+            return;
+        }
+
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            if (!NeedsTaskClassInvocation(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetTaskClassInvocationFieldName(method);
+            var resultType = GetAsyncResultTypeName(method.ReturnType);
+            builder.AppendLine($"        {fieldName} = new {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}>(_inner, {methodField}, {emptyArgs}, wrapMethodWithMetadata: false);");
+            return;
+        }
+
+        if (!NeedsValueTaskClassInvocation(interceptors))
+        {
+            return;
+        }
+
+        var valueTaskFieldName = GetValueTaskClassInvocationFieldName(method);
+        var valueTaskResultType = GetAsyncResultTypeName(method.ReturnType);
+        builder.AppendLine($"        {valueTaskFieldName} = new {AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{valueTaskResultType}>(_inner, {methodField}, {emptyArgs}, wrapMethodWithMetadata: false);");
+    }
+
+    private static void EmitChainArrayField(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (!method.IsAsync)
+        {
+            if (IsAllClassInvocationSync(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetSyncChainFieldName(method);
+            builder.AppendLine($"    private readonly {AbpTypeNames.FullyQualified.AbpSyncChainStepDelegate}[] {fieldName};");
+            builder.AppendLine();
+            return;
+        }
+
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            if (IsAllClassInvocationTask(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetTaskChainFieldName(method);
+            var asyncType = GetAsyncChainDelegateTypeName(method, isTask: true);
+            builder.AppendLine($"    private readonly {asyncType}[] {fieldName};");
+            builder.AppendLine();
+            return;
+        }
+
+        if (IsAllClassInvocationValueTask(interceptors))
+        {
+            return;
+        }
+
+        var valueTaskFieldName = GetValueTaskChainFieldName(method);
+        var valueTaskAsyncType = GetAsyncChainDelegateTypeName(method, isTask: false);
+        builder.AppendLine($"    private readonly {valueTaskAsyncType}[] {valueTaskFieldName};");
+        builder.AppendLine();
+    }
+
+    private static void EmitChainArrayCtorAssignment(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (!method.IsAsync)
+        {
+            if (IsAllClassInvocationSync(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetSyncChainFieldName(method);
+            var entries = interceptors
+                .Select((_, i) => GetSyncLayerMethodName(method, i))
+                .Append(GetSyncTailMethodName(method));
+            builder.AppendLine($"        {fieldName} = new {AbpTypeNames.FullyQualified.AbpSyncChainStepDelegate}[]");
+            builder.AppendLine("        {");
+            foreach (var entry in entries)
+            {
+                builder.AppendLine($"            {entry},");
+            }
+            builder.AppendLine("        };");
+            return;
+        }
+
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            if (IsAllClassInvocationTask(interceptors))
+            {
+                return;
+            }
+
+            var fieldName = GetTaskChainFieldName(method);
+            var asyncType = GetAsyncChainDelegateTypeName(method, isTask: true);
+            var entries = interceptors
+                .Select((_, i) => GetTaskLayerMethodName(method, i))
+                .Append(GetTaskTailMethodName(method));
+            builder.AppendLine($"        {fieldName} = new {asyncType}[]");
+            builder.AppendLine("        {");
+            foreach (var entry in entries)
+            {
+                builder.AppendLine($"            {entry},");
+            }
+            builder.AppendLine("        };");
+            return;
+        }
+
+        if (IsAllClassInvocationValueTask(interceptors))
+        {
+            return;
+        }
+
+        var valueTaskFieldName = GetValueTaskChainFieldName(method);
+        var valueTaskAsyncType = GetAsyncChainDelegateTypeName(method, isTask: false);
+        var valueTaskEntries = interceptors
+            .Select((_, i) => GetValueTaskLayerMethodName(method, i))
+            .Append(GetValueTaskTailMethodName(method));
+        builder.AppendLine($"        {valueTaskFieldName} = new {valueTaskAsyncType}[]");
+        builder.AppendLine("        {");
+        foreach (var entry in valueTaskEntries)
+        {
+            builder.AppendLine($"            {entry},");
+        }
+        builder.AppendLine("        };");
+    }
+
+    private static void EmitLayerMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (!method.IsAsync)
+        {
+            EmitSyncLayerMethods(builder, method, interceptors);
+            return;
+        }
+
+        if (IsTaskReturnType(method.ReturnType))
+        {
+            EmitTaskLayerMethods(builder, method, interceptors);
+            return;
+        }
+
+        EmitValueTaskLayerMethods(builder, method, interceptors);
+    }
+
+    private static void EmitSyncLayerMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (IsAllClassInvocationSync(interceptors))
+        {
+            EmitPureClassInvocationSyncLayerMethods(builder, method, interceptors);
+            return;
+        }
+
+        var executor = AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor;
+        var invocationType = AbpTypeNames.FullyQualified.AbpInvocationStruct;
+
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            builder.AppendLine($"    private void {GetSyncLayerMethodName(method, i)}(ref {invocationType} inv)");
+            builder.AppendLine("    {");
+            EmitSyncChainLayerCase(builder, method, interceptors, i, executor, indent: "        ");
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
+        var innerCall = BuildDeferredInnerCallExpression(method);
+        builder.AppendLine($"    private void {GetSyncTailMethodName(method)}(ref {invocationType} inv)");
+        builder.AppendLine("    {");
+        builder.AppendLine($"        {innerCall};");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+
+        if (NeedsSyncClassInvocation(interceptors))
+        {
+            EmitSyncClassProceedMethods(builder, method, interceptors, mixed: IsMixedSync(interceptors));
+        }
+    }
+
+    private static void EmitPureClassInvocationSyncLayerMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        var executor = AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor;
+        var classInvocation = GetClassInvocationVarName();
+
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            var classInvocationIndex = CountSyncClassInvocationLayersBefore(interceptors, i);
+            builder.AppendLine($"    private void {GetSyncClassLayerMethodName(method, i)}({AbpTypeNames.FullyQualified.AbpInvocationCompileTime} {classInvocation})");
+            builder.AppendLine("    {");
+            builder.AppendLine($"        {executor}.RunSyncClassLayer({classInvocation}, {interceptors[i].FieldName}, {GetSyncClassProceedFieldName(method, classInvocationIndex)});");
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
+        EmitSyncClassProceedMethods(builder, method, interceptors, mixed: false);
+        EmitPureClassInvocationSyncTail(builder, method, classInvocation);
+    }
+
+    private static void EmitPureClassInvocationSyncTail(
+        StringBuilder builder,
+        MethodModel method,
+        string classInvocationExpression)
+    {
+        builder.AppendLine($"    private object? {GetSyncClassTailMethodName(method)}({AbpTypeNames.FullyQualified.AbpInvocationCompileTime} {classInvocationExpression})");
+        builder.AppendLine("    {");
+
+        if (method.Parameters.IsDefaultOrEmpty)
+        {
+            if (method.ReturnType == "void")
+            {
+                builder.AppendLine($"        _inner.{method.Name}();");
+                builder.AppendLine("        return null;");
+            }
+            else
+            {
+                builder.AppendLine($"        return {classInvocationExpression}.ReturnValue = _inner.{method.Name}();");
+            }
+        }
+        else
+        {
+            var args = BuildClassInvocationArgumentsExpression(method, classInvocationExpression);
+            if (method.ReturnType == "void")
+            {
+                builder.AppendLine($"        _inner.{method.Name}({args});");
+                builder.AppendLine("        return null;");
+            }
+            else
+            {
+                builder.AppendLine($"        return {classInvocationExpression}.ReturnValue = _inner.{method.Name}({args});");
+            }
+        }
+
+        builder.AppendLine("    }");
+        builder.AppendLine();
+    }
+
+    private static void EmitSyncClassProceedMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        bool mixed)
+    {
+        var classInvocationCount = CountSyncClassInvocationLayers(interceptors);
+        if (classInvocationCount == 0)
+        {
+            return;
+        }
+
+        var classInvocation = GetClassInvocationVarName();
+
+        for (var classInvocationIndex = 0; classInvocationIndex < classInvocationCount; classInvocationIndex++)
+        {
+            builder.AppendLine($"    private object? {GetSyncClassProceedMethodName(method, classInvocationIndex)}({AbpTypeNames.FullyQualified.AbpInvocationCompileTime} {classInvocation})");
+            builder.AppendLine("    {");
+
+            if (mixed)
+            {
+                builder.AppendLine($"        {classInvocation}.MixedStructHolder!.Value.Proceed();");
+                builder.AppendLine($"        return {classInvocation}.MixedStructHolder!.Value.ReturnValue;");
+            }
+            else if (classInvocationIndex + 1 < classInvocationCount)
+            {
+                var nextLayerIndex = GetLayerIndexForSyncClassInvocation(interceptors, classInvocationIndex + 1);
+                builder.AppendLine($"        {GetSyncClassLayerMethodName(method, nextLayerIndex)}({classInvocation});");
+                builder.AppendLine($"        return {classInvocation}.ReturnValue;");
+            }
+            else
+            {
+                builder.AppendLine($"        return {GetSyncClassTailMethodName(method)}({classInvocation});");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+    }
+
+    private static void EmitTaskLayerMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (IsAllClassInvocationTask(interceptors))
+        {
+            EmitPureClassInvocationTaskLayerMethods(builder, method, interceptors);
+            return;
+        }
+
+        var executor = AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor;
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        var invocationType = GetAsyncInvocationTypeName(method, isTask: true);
+        var wrapVoidReturn = IsVoidAsyncReturnType(method.ReturnType);
+
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            builder.AppendLine($"    private global::System.Threading.Tasks.Task<{resultType}> {GetTaskLayerMethodName(method, i)}(ref {invocationType} inv)");
+            builder.AppendLine("    {");
+            EmitTaskChainLayerCase(builder, method, interceptors, i, executor, resultType, wrapVoidReturn, indent: "        ");
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
+        var innerCall = BuildDeferredInnerReturnExpression(method);
+        builder.AppendLine($"    private global::System.Threading.Tasks.Task<{resultType}> {GetTaskTailMethodName(method)}(ref {invocationType} inv)");
+        builder.AppendLine("    {");
+        builder.AppendLine($"        {innerCall}");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+
+        if (NeedsTaskClassInvocation(interceptors))
+        {
+            EmitTaskClassProceedMethods(builder, method, interceptors, resultType, mixed: IsMixedTask(interceptors));
+        }
+    }
+
+    private static void EmitPureClassInvocationTaskLayerMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        var executor = AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor;
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        var classInvocation = GetScopeClassInvocationExpression(method, isAsync: true, isTask: true);
+
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            var classInvocationIndex = CountTaskClassInvocationLayersBefore(interceptors, i);
+            builder.AppendLine($"    private global::System.Threading.Tasks.Task<{resultType}> {GetTaskClassLayerMethodName(method, i)}()");
+            builder.AppendLine("    {");
+            builder.AppendLine($"        return {executor}.RunTaskClassLayer<{resultType}>({classInvocation}, {interceptors[i].FieldName}, {GetTaskClassProceedFieldName(method, classInvocationIndex)});");
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
+        EmitTaskClassProceedMethods(builder, method, interceptors, resultType, mixed: false);
+        EmitPureClassInvocationTaskTail(builder, method, classInvocation);
+    }
+
+    private static void EmitPureClassInvocationTaskTail(StringBuilder builder, MethodModel method, string classInvocationExpression)
+    {
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        builder.AppendLine($"    private global::System.Threading.Tasks.Task<{resultType}> {GetTaskClassTailMethodName(method)}()");
+        builder.AppendLine("    {");
+        builder.AppendLine(method.Parameters.IsDefaultOrEmpty
+            ? $"        return _inner.{method.Name}();"
+            : $"        return _inner.{method.Name}({BuildClassInvocationArgumentsExpression(method, classInvocationExpression)});");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+    }
+
+    private static void EmitTaskClassProceedMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string resultType,
+        bool mixed)
+    {
+        var classInvocationCount = CountTaskClassInvocationLayers(interceptors);
+        if (classInvocationCount == 0)
+        {
+            return;
+        }
+
+        var asyncStructValue = GetAsyncStructHolderValueExpression(method, isTask: true);
+        var classInvocationType = AbpTypeNames.FullyQualified.AbpInvocationCompileTime;
+
+        for (var classInvocationIndex = 0; classInvocationIndex < classInvocationCount; classInvocationIndex++)
+        {
+            builder.AppendLine($"    private global::System.Threading.Tasks.Task<object?> {GetTaskClassProceedMethodName(method, classInvocationIndex)}({classInvocationType} {GetClassInvocationVarName()})");
+            builder.AppendLine("    {");
+
+            if (mixed)
+            {
+                builder.AppendLine($"        return global::System.Threading.Tasks.Task.FromResult<object?>({asyncStructValue}.Proceed());");
+            }
+            else if (classInvocationIndex + 1 < classInvocationCount)
+            {
+                var nextLayerIndex = GetLayerIndexForTaskClassInvocation(interceptors, classInvocationIndex + 1);
+                builder.AppendLine($"        return global::System.Threading.Tasks.Task.FromResult<object?>({GetTaskClassLayerMethodName(method, nextLayerIndex)}());");
+            }
+            else
+            {
+                builder.AppendLine($"        return global::System.Threading.Tasks.Task.FromResult<object?>({GetTaskClassTailMethodName(method)}());");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+    }
+
+    private static void EmitValueTaskLayerMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (IsAllClassInvocationValueTask(interceptors))
+        {
+            EmitPureClassInvocationValueTaskLayerMethods(builder, method, interceptors);
+            return;
+        }
+
+        var executor = AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor;
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        var invocationType = GetAsyncInvocationTypeName(method, isTask: false);
+        var wrapVoidReturn = IsVoidAsyncReturnType(method.ReturnType);
+
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            builder.AppendLine($"    private global::System.Threading.Tasks.ValueTask<{resultType}> {GetValueTaskLayerMethodName(method, i)}(ref {invocationType} inv)");
+            builder.AppendLine("    {");
+            EmitValueTaskChainLayerCase(builder, method, interceptors, i, executor, resultType, wrapVoidReturn, indent: "        ");
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
+        var innerCall = BuildDeferredInnerReturnExpression(method);
+        builder.AppendLine($"    private global::System.Threading.Tasks.ValueTask<{resultType}> {GetValueTaskTailMethodName(method)}(ref {invocationType} inv)");
+        builder.AppendLine("    {");
+        builder.AppendLine($"        {innerCall}");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+
+        if (NeedsValueTaskClassInvocation(interceptors))
+        {
+            EmitValueTaskClassProceedMethods(builder, method, interceptors, resultType, mixed: IsMixedValueTask(interceptors));
+        }
+    }
+
+    private static void EmitPureClassInvocationValueTaskLayerMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        var executor = AbpTypeNames.FullyQualified.CompileTimeInvocationInterceptorExecutor;
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        var classInvocation = GetScopeClassInvocationExpression(method, isAsync: true, isTask: false);
+
+        for (var i = 0; i < interceptors.Length; i++)
+        {
+            var classInvocationIndex = CountValueTaskClassInvocationLayersBefore(interceptors, i);
+            builder.AppendLine($"    private global::System.Threading.Tasks.ValueTask<{resultType}> {GetValueTaskClassLayerMethodName(method, i)}()");
+            builder.AppendLine("    {");
+            builder.AppendLine($"        return {executor}.RunValueTaskClassLayer<{resultType}>({classInvocation}, {interceptors[i].FieldName}, {GetValueTaskClassProceedFieldName(method, classInvocationIndex)});");
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
+        EmitValueTaskClassProceedMethods(builder, method, interceptors, resultType, mixed: false);
+        EmitPureClassInvocationValueTaskTail(builder, method, classInvocation);
+    }
+
+    private static void EmitPureClassInvocationValueTaskTail(StringBuilder builder, MethodModel method, string classInvocationExpression)
+    {
+        var resultType = GetAsyncResultTypeName(method.ReturnType);
+        builder.AppendLine($"    private global::System.Threading.Tasks.ValueTask<{resultType}> {GetValueTaskClassTailMethodName(method)}()");
+        builder.AppendLine("    {");
+        builder.AppendLine(method.Parameters.IsDefaultOrEmpty
+            ? $"        return _inner.{method.Name}();"
+            : $"        return _inner.{method.Name}({BuildClassInvocationArgumentsExpression(method, classInvocationExpression)});");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+    }
+
+    private static void EmitValueTaskClassProceedMethods(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        string resultType,
+        bool mixed)
+    {
+        var classInvocationCount = CountValueTaskClassInvocationLayers(interceptors);
+        if (classInvocationCount == 0)
+        {
+            return;
+        }
+
+        var asyncStructValue = GetAsyncStructHolderValueExpression(method, isTask: false);
+        var classInvocationType = AbpTypeNames.FullyQualified.AbpInvocationCompileTime;
+
+        for (var classInvocationIndex = 0; classInvocationIndex < classInvocationCount; classInvocationIndex++)
+        {
+            builder.AppendLine($"    private global::System.Threading.Tasks.Task<object?> {GetValueTaskClassProceedMethodName(method, classInvocationIndex)}({classInvocationType} {GetClassInvocationVarName()})");
+            builder.AppendLine("    {");
+
+            if (mixed)
+            {
+                builder.AppendLine($"        return global::System.Threading.Tasks.Task.FromResult<object?>({asyncStructValue}.Proceed().AsTask());");
+            }
+            else if (classInvocationIndex + 1 < classInvocationCount)
+            {
+                var nextLayerIndex = GetLayerIndexForValueTaskClassInvocation(interceptors, classInvocationIndex + 1);
+                builder.AppendLine($"        return global::System.Threading.Tasks.Task.FromResult<object?>({GetValueTaskClassLayerMethodName(method, nextLayerIndex)}().AsTask());");
+            }
+            else
+            {
+                builder.AppendLine($"        return global::System.Threading.Tasks.Task.FromResult<object?>({GetValueTaskClassTailMethodName(method)}().AsTask());");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+    }
+
+    private static string GetAsyncChainDelegateTypeName(MethodModel method, bool isTask)
+    {
+        var asyncTypePrefix = isTask
+            ? "global::System.Threading.Tasks.Task"
+            : "global::System.Threading.Tasks.ValueTask";
+        return $"{AbpTypeNames.FullyQualified.AbpAsyncChainStepDelegate}<{asyncTypePrefix}<{GetAsyncResultTypeName(method.ReturnType)}>>";
+    }
+
+    private static string GetArgumentsExpression(MethodModel method)
+    {
+        return method.ArgumentList.Length == 0
+            ? "global::System.Array.Empty<object?>()"
+            : $"new object?[] {{ {method.ArgumentList} }}";
+    }
+
+    private static void EmitSyncChainEntry(
+        StringBuilder builder,
+        MethodModel method,
+        string innerCallExpression,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        if (IsAllClassInvocationSync(interceptors))
+        {
+            EmitPooledClassInvocationBlockStart(builder, GetRentSyncClassInvocationExpression(method));
+            builder.AppendLine($"            {GetClassInvocationVarName()}.PrepareForCall({GetArgumentsExpression(method)}, null);");
+            builder.AppendLine($"            {GetSyncClassLayerMethodName(method, 0)}({GetClassInvocationVarName()});");
+
+            if (method.ReturnType != "void")
+            {
+                builder.AppendLine($"            return ({method.ReturnType}){GetClassInvocationVarName()}.ReturnValue!;");
+            }
+
+            EmitPooledClassInvocationBlockEnd(builder);
+            return;
+        }
+
+        if (IsMixedSync(interceptors))
+        {
+            var chain = GetSyncChainFieldName(method);
+            EmitPooledClassInvocationBlockStart(builder, GetRentSyncClassInvocationExpression(method));
+            builder.AppendLine($"            var {MixedStructHolderVarName} = {GetPoolTypeName()}.RentStructHolder();");
+            builder.AppendLine("            try");
+            builder.AppendLine("            {");
+            builder.AppendLine($"                {MixedStructHolderVarName}.Value.Initialize(_inner, {GetInvocationMethodExpression(method)}, {GetArgumentsExpression(method)});");
+            builder.AppendLine($"                {MixedStructHolderVarName}.Value.ClassInvocation = {GetClassInvocationVarName()};");
+            builder.AppendLine($"                {GetClassInvocationVarName()}.AttachMixedStructHolder({MixedStructHolderVarName});");
+            builder.AppendLine($"                {MixedStructHolderVarName}.Value.BeginSyncChain({chain});");
+            builder.AppendLine($"                {MixedStructHolderVarName}.Value.Proceed();");
+
+            if (method.ReturnType != "void")
+            {
+                builder.AppendLine($"                return ({method.ReturnType}){MixedStructHolderVarName}.Value.ReturnValue!;");
+            }
+
+            builder.AppendLine("            }");
+            builder.AppendLine("            finally");
+            builder.AppendLine("            {");
+            builder.AppendLine($"                {GetClassInvocationVarName()}.DetachMixedStructHolder();");
+            builder.AppendLine($"                {GetPoolTypeName()}.Return({MixedStructHolderVarName});");
+            builder.AppendLine("            }");
+            EmitPooledClassInvocationBlockEnd(builder);
+            return;
+        }
+
+        EmitStackSyncChainEntry(builder, method, innerCallExpression, interceptors);
+    }
+
+    private static void EmitAsyncChainEntry(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        bool isTask,
+        string innerCallExpression)
+    {
+        if (isTask)
+        {
+            if (IsAllClassInvocationTask(interceptors))
+            {
+                EmitAsyncScopedPooledInvocationStart(builder, method);
+                builder.AppendLine($"                scope.ClassInvocation.PrepareForCall({GetArgumentsExpression(method)});");
+                builder.AppendLine($"                return {GetTaskClassLayerMethodName(method, 0)}();");
+            }
+            else if (IsMixedTask(interceptors))
+            {
+                var chain = GetTaskChainFieldName(method);
+                var holderType = GetAsyncStructHolderTypeName(method, isTask: true);
+                EmitAsyncScopedPooledInvocationStart(builder, method);
+                builder.AppendLine($"                var asyncHolder = new {holderType}();");
+                builder.AppendLine($"                scope.AsyncHolder = asyncHolder;");
+                builder.AppendLine($"                asyncHolder.Value.Initialize(_inner, {GetInvocationMethodExpression(method)}, {GetArgumentsExpression(method)});");
+                builder.AppendLine($"                asyncHolder.Value.BeginAsyncChain({chain});");
+                builder.AppendLine($"                asyncHolder.Value.ClassInvocation = scope.ClassInvocation;");
+                builder.AppendLine($"                return asyncHolder.Value.Proceed();");
+            }
+            else
+            {
+                EmitStackAsyncChainEntry(builder, method, interceptors, isTask, innerCallExpression);
+                return;
+            }
+
+            EmitAsyncScopedPooledInvocationEnd(builder);
+            return;
+        }
+
+        if (IsAllClassInvocationValueTask(interceptors))
+        {
+            EmitAsyncScopedPooledInvocationStart(builder, method);
+            builder.AppendLine($"                scope.ClassInvocation.PrepareForCall({GetArgumentsExpression(method)});");
+            builder.AppendLine($"                return {GetValueTaskClassLayerMethodName(method, 0)}();");
+            EmitAsyncScopedPooledInvocationEnd(builder);
+            return;
+        }
+
+        if (IsMixedValueTask(interceptors))
+        {
+            var chain = GetValueTaskChainFieldName(method);
+            var holderType = GetAsyncStructHolderTypeName(method, isTask: false);
+            EmitAsyncScopedPooledInvocationStart(builder, method);
+            builder.AppendLine($"                var asyncHolder = new {holderType}();");
+            builder.AppendLine($"                scope.AsyncHolder = asyncHolder;");
+            builder.AppendLine($"                asyncHolder.Value.Initialize(_inner, {GetInvocationMethodExpression(method)}, {GetArgumentsExpression(method)});");
+            builder.AppendLine($"                asyncHolder.Value.BeginAsyncChain({chain});");
+            builder.AppendLine($"                asyncHolder.Value.ClassInvocation = scope.ClassInvocation;");
+            builder.AppendLine($"                return asyncHolder.Value.Proceed();");
+            EmitAsyncScopedPooledInvocationEnd(builder);
+            return;
+        }
+
+        EmitStackAsyncChainEntry(builder, method, interceptors, isTask, innerCallExpression);
+    }
+
+    private static void EmitStackSyncChainEntry(
+        StringBuilder builder,
+        MethodModel method,
+        string innerCallExpression,
+        ImmutableArray<BakedInterceptorField> interceptors)
+    {
+        var chainField = GetSyncChainFieldName(method);
+        const string invocationVar = "syncInvocation";
+
+        builder.AppendLine($"        {AbpTypeNames.FullyQualified.AbpInvocationStruct} {invocationVar} = default;");
+        builder.AppendLine($"        {invocationVar}.Initialize(_inner, {GetInvocationMethodExpression(method)}, {GetArgumentsExpression(method)});");
+        builder.AppendLine($"        {invocationVar}.BeginSyncChain({chainField});");
+        builder.AppendLine($"        {invocationVar}.Proceed();");
+
+        if (method.ReturnType != "void")
+        {
+            builder.AppendLine($"        return ({method.ReturnType}){invocationVar}.ReturnValue!;");
+        }
+    }
+
+    private static void EmitStackAsyncChainEntry(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        bool isTask,
+        string innerCallExpression)
+    {
+        var chainField = isTask ? GetTaskChainFieldName(method) : GetValueTaskChainFieldName(method);
+        var invocationType = GetAsyncInvocationTypeName(method, isTask);
+        const string invocationVar = "asyncInvocation";
+
+        builder.AppendLine($"        {invocationType} {invocationVar} = default;");
+        builder.AppendLine($"        {invocationVar}.Initialize(_inner, {GetInvocationMethodExpression(method)}, {GetArgumentsExpression(method)});");
+        builder.AppendLine($"        {invocationVar}.BeginAsyncChain({chainField});");
+        builder.AppendLine($"        return {invocationVar}.Proceed();");
+    }
+
+    private static void EmitSyncChainLayerCase(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        int layerIndex,
+        string executor,
+        string indent)
+    {
+        var interceptor = interceptors[layerIndex];
+
+        if (interceptor.SyncLayerKind == SyncLayerKind.AllocationFreeSync)
+        {
+            builder.AppendLine($"{indent}{executor}.RunSyncAllocationFreeLayer(ref inv, {GetSyncInterceptorExpression(interceptor)});");
+            return;
+        }
+
+        var classInvocationIndex = CountSyncClassInvocationLayersBefore(interceptors, layerIndex);
+        builder.AppendLine($"{indent}{executor}.RunSyncClassLayer(ref inv, {interceptor.FieldName}, inv.ClassInvocation!, {GetSyncClassProceedFieldName(method, classInvocationIndex)});");
+    }
+
+    private static string BuildClassInvocationArgumentsExpression(MethodModel method, string classInvocationField)
+    {
+        if (method.Parameters.IsDefaultOrEmpty)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(", ", method.Parameters.Select(p =>
+            $"({p.TypeName}){classInvocationField}.Arguments[{p.Position}]!"));
+    }
+
+    private static string BuildInvocationArgumentsExpression(MethodModel method)
+    {
+        if (method.Parameters.IsDefaultOrEmpty)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(", ", method.Parameters.Select(p =>
+            $"({p.TypeName})inv.Arguments[{p.Position}]!"));
+    }
+
+    private static string BuildDeferredInnerCallExpression(MethodModel method)
+    {
+        var call = method.Parameters.IsDefaultOrEmpty
+            ? $"_inner.{method.Name}()"
+            : $"_inner.{method.Name}({BuildInvocationArgumentsExpression(method)})";
+
+        if (method.ReturnType == "void")
+        {
+            return call;
+        }
+
+        return $"inv.ReturnValue = {call}";
+    }
+
+    private static string BuildDeferredInnerReturnExpression(MethodModel method)
+    {
+        return method.Parameters.IsDefaultOrEmpty
+            ? $"return _inner.{method.Name}();"
+            : $"return _inner.{method.Name}({BuildInvocationArgumentsExpression(method)});";
+    }
+
+    private static void EmitTaskChainLayerCase(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        int layerIndex,
+        string executor,
+        string resultType,
+        bool wrapVoidReturn,
+        string indent)
+    {
+        var interceptor = interceptors[layerIndex];
+
+        if (interceptor.TaskLayerKind == TaskLayerKind.AllocationFreeTask)
+        {
+            builder.AppendLine($"{indent}var result = {executor}.RunTaskAllocationFreeLayer<{resultType}>(ref inv, {GetTaskInterceptorExpression(interceptor)});");
+            EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask: true, indent);
+            return;
+        }
+
+        var classInvocationIndex = CountTaskClassInvocationLayersBefore(interceptors, layerIndex);
+        var classInvocationExpression = $"({AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}>)inv.ClassInvocation!";
+        builder.AppendLine($"{indent}var result = {executor}.RunTaskClassLayer<{resultType}>(ref inv, {interceptor.FieldName}, {classInvocationExpression}, {GetTaskClassProceedFieldName(method, classInvocationIndex)});");
+        EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask: true, indent);
+    }
+
+    private static void EmitValueTaskChainLayerCase(
+        StringBuilder builder,
+        MethodModel method,
+        ImmutableArray<BakedInterceptorField> interceptors,
+        int layerIndex,
+        string executor,
+        string resultType,
+        bool wrapVoidReturn,
+        string indent)
+    {
+        var interceptor = interceptors[layerIndex];
+
         if (interceptor.ValueTaskLayerKind == ValueTaskLayerKind.AllocationFreeValueTask)
         {
-            builder.AppendLine($"        var result = {GetValueTaskInterceptorExpression(interceptor)}.InterceptAsynchronous<{resultType}>(invocation);");
-            EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask);
+            builder.AppendLine($"{indent}var result = {executor}.RunValueTaskAllocationFreeLayer<{resultType}>(ref inv, {GetValueTaskInterceptorExpression(interceptor)});");
+            EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask: false, indent);
             return;
         }
 
         if (interceptor.ValueTaskLayerKind == ValueTaskLayerKind.AllocationFreeTaskBridge)
         {
-            builder.AppendLine($"        var taskInvocation = default({AbpTypeNames.FullyQualified.AbpInvocationStruct}<global::System.Threading.Tasks.Task<{resultType}>>);");
-            builder.AppendLine("        taskInvocation.Initialize(invocation.InvocationTarget, invocation.InvocationMethod, invocation.Arguments);");
-            builder.AppendLine($"        taskInvocation.SetProceed({GetAsyncValueTaskToTaskProceedField(methodPrefix)});");
-            builder.AppendLine($"        var taskResult = {GetValueTaskInterceptorExpression(interceptor)}.InterceptAsynchronous<{resultType}>(taskInvocation);");
-            builder.AppendLine($"        var result = new global::System.Threading.Tasks.ValueTask<{resultType}>(taskResult);");
-            EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask);
+            builder.AppendLine($"{indent}var result = {executor}.RunValueTaskTaskStructLayer<{resultType}>(ref inv, {GetValueTaskInterceptorExpression(interceptor)});");
+            EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask: false, indent);
             return;
         }
 
-        builder.AppendLine($"        var bridge = {compileTime}<{resultType}>.EnsureClassBridge(ref invocation, ref {classBridgeField});");
-        builder.AppendLine($"        {asyncBridge}.ConfigureValueTaskProceed(invocation, bridge);");
-        var compatibleBridge = $"new {AbpTypeNames.FullyQualified.AbpInvocationCompileTimeTaskCompatible}(bridge)";
-        if (resultType == AbpTypeNames.FullyQualified.AbpUnit)
-        {
-            builder.AppendLine($"        {interceptor.FieldName}.InterceptAsynchronous({compatibleBridge});");
-        }
-        else
-        {
-            builder.AppendLine($"        {interceptor.FieldName}.InterceptAsynchronous<{resultType}>({compatibleBridge});");
-        }
-
-        builder.AppendLine($"        var result = {asyncBridge}.ResolveValueTaskReturn<{resultType}>(bridge);");
-        EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask);
+        var classInvocationIndex = CountValueTaskClassInvocationLayersBefore(interceptors, layerIndex);
+        var classInvocationExpression = $"({AbpTypeNames.FullyQualified.AbpInvocationCompileTime}<{resultType}>)inv.ClassInvocation!";
+        builder.AppendLine($"{indent}var result = {executor}.RunValueTaskClassLayer<{resultType}>(ref inv, {interceptor.FieldName}, {classInvocationExpression}, {GetValueTaskClassProceedFieldName(method, classInvocationIndex)});");
+        EmitAsyncReturnStatement(builder, "result", wrapVoidReturn, isTask: false, indent);
     }
 
     private static void EmitAsyncReturnStatement(
         StringBuilder builder,
         string resultVariable,
         bool wrapVoidReturn,
-        bool isTask)
+        bool isTask,
+        string indent)
     {
         if (wrapVoidReturn)
         {
             var coercion = isTask
                 ? $"{AbpTypeNames.FullyQualified.AbpAsyncCoercion}.ToVoidTask"
                 : $"{AbpTypeNames.FullyQualified.AbpAsyncCoercion}.ToVoidValueTask";
-            builder.AppendLine($"        return {coercion}({resultVariable});");
+            builder.AppendLine($"{indent}return {coercion}({resultVariable});");
             return;
         }
 
-        builder.AppendLine($"        return {resultVariable};");
-    }
-
-    private static string GetAsyncValueTaskToTaskProceedField(string methodPrefix) =>
-        $"_{char.ToLowerInvariant(methodPrefix[0])}{methodPrefix.Substring(1)}ValueTaskToTaskProceed";
-
-    private static string GetAsyncValueTaskToTaskProceedMethodName(string methodPrefix) =>
-        $"{methodPrefix}_ValueTaskToTaskProceed";
-
-    private static bool MethodUsesValueTaskTaskBridge(ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        return interceptors.Any(i => i.ValueTaskLayerKind == ValueTaskLayerKind.AllocationFreeTaskBridge);
-    }
-
-    private static bool MethodUsesAsyncClassBridge(ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        return interceptors.Any(i =>
-            UsesClassBridgeParameterForTask(i) || UsesClassBridgeParameterForValueTask(i));
-    }
-
-    private static bool UsesClassBridgeParameterForTask(BakedInterceptorField interceptor)
-    {
-        return interceptor.TaskLayerKind != TaskLayerKind.AllocationFreeTask;
-    }
-
-    private static bool UsesClassBridgeParameterForSync(BakedInterceptorField interceptor)
-    {
-        return interceptor.SyncLayerKind != SyncLayerKind.AllocationFreeSync;
-    }
-
-    private static bool MethodUsesSyncClassBridge(ImmutableArray<BakedInterceptorField> interceptors)
-    {
-        return interceptors.Any(UsesClassBridgeParameterForSync);
+        builder.AppendLine($"{indent}return {resultVariable};");
     }
 
     private static string GetSyncInterceptorExpression(BakedInterceptorField interceptor)
@@ -773,11 +1617,6 @@ internal static class InterceptorEmitter
                 $"(({AbpTypeNames.FullyQualified.IAbpInterceptorSync}){interceptor.FieldName})",
             _ => interceptor.FieldName,
         };
-    }
-
-    private static bool UsesClassBridgeParameterForValueTask(BakedInterceptorField interceptor)
-    {
-        return interceptor.ValueTaskLayerKind == ValueTaskLayerKind.ClassBridge;
     }
 
     private static string GetTaskInterceptorExpression(BakedInterceptorField interceptor)

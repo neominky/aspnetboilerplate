@@ -6,11 +6,11 @@ using Abp.Runtime.Validation;
 
 namespace Abp.Interception.Benchmarks.Fork.Application;
 
-public interface IClassBridgeComparisonAppService : IApplicationService, IBenchmarkComparisonAppService;
+public interface IClassInvocationComparisonAppService : IApplicationService, IBenchmarkComparisonAppService;
 
 [DisableAuditing]
 [UnitOfWork(IsDisabled = true)]
-public class ClassBridgeComparisonAppService : ApplicationService, IClassBridgeComparisonAppService
+public class ClassInvocationComparisonAppService : ApplicationService, IClassInvocationComparisonAppService
 {
     [DisableValidation]
     [BenchmarkTrigger1]

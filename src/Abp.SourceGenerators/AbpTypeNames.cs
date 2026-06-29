@@ -86,6 +86,8 @@ internal static class AbpTypeNames
         public const string DisableConventionalRegistrationAttribute = "global::Abp.Dependency.CompileTime.DisableConventionalRegistration";
         public const string AbpInvocationCompileTime = "global::Abp.Dependency.CompileTime.AbpInvocationCompileTime";
         public const string AbpInvocationStruct = "global::Abp.Dependency.CompileTime.AbpInvocationStruct";
+        public const string AbpSyncChainStepDelegate = "global::Abp.Dependency.CompileTime.AbpSyncChainStepDelegate";
+        public const string AbpAsyncChainStepDelegate = "global::Abp.Dependency.CompileTime.AbpAsyncChainStepDelegate";
         public const string AbpUnit = "global::Abp.Dependency.CompileTime.AbpUnit";
         public const string AbpAsyncCoercion = "global::Abp.Dependency.CompileTime.AbpAsyncCoercion";
         public const string AbpInvocationMethod = "global::Abp.Dependency.CompileTime.AbpInvocationMethod";
@@ -93,10 +95,10 @@ internal static class AbpTypeNames
         public const string AbpMethodInterceptionMetadata = "global::Abp.Dependency.AbpMethodInterceptionMetadata";
         public const string CompileTimeIocRegistrarRegistry = "global::Abp.Dependency.CompileTime.CompileTimeIocRegistrarRegistry";
         public const string CompileTimeInvocationInterceptorExecutor = "global::Abp.Dependency.CompileTime.CompileTimeInvocationInterceptorExecutor";
-        public const string AbpInvocationCompileTimeAsyncBridge = "global::Abp.Dependency.CompileTime.AbpInvocationCompileTimeAsyncBridge";
+        public const string CompileTimeInvocationScope = "global::Abp.Dependency.CompileTime.CompileTimeInvocationScope";
+        public const string CompileTimeInvocationPool = "global::Abp.Dependency.CompileTime.CompileTimeInvocationPool";
+        public const string AbpInvocationStructHolder = "global::Abp.Dependency.CompileTime.AbpInvocationStructHolder";
         public const string AbpInvocationReturnValueMaterializer = "global::Abp.Dependency.CompileTime.AbpInvocationReturnValueMaterializer";
-        public const string AbpInvocationCompileTimeTaskCompatible = "global::Abp.Dependency.CompileTime.AbpInvocationCompileTimeTaskCompatible";
-        public const string SyncInvocationState = "global::Abp.Dependency.CompileTime.SyncInvocationState";
         public const string CompileTimeBuiltInInterceptorProvider = "global::Abp.Dependency.CompileTime.CompileTimeBuiltInInterceptorProvider";
         public const string AuditedAttribute = "global::Abp.Auditing.AuditedAttribute";
         public const string AbpAllowAnonymousAttribute = "global::Abp.Authorization.AbpAllowAnonymousAttribute";

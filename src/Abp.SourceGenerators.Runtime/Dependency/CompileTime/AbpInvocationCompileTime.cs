@@ -8,10 +8,13 @@ namespace Abp.Dependency.CompileTime
     public class AbpInvocationCompileTime : IAbpInvocation,
         IAbpInterceptorValueTaskReturnHost, IAbpInterceptorValueTaskReturnSource
     {
-        private readonly MethodInfo _method;
-        private Action? _proceedSync;
-        private Func<object?>? _proceedSyncFunc;
-        private Func<Task<object?>>? _proceedAsync;
+        private object _invocationTarget = null!;
+        private MethodInfo _method = null!;
+        private object?[] _arguments = null!;
+        private Func<object?>? _proceedSync;
+        private Func<AbpInvocationCompileTime, object?>? _proceedSyncWithInvocation;
+        private Func<AbpInvocationCompileTime, Task<object?>>? _proceedAsyncWithInvocation;
+        private AbpInvocationStructHolder? _mixedStructHolder;
 
         public AbpInvocationCompileTime(
             object invocationTarget,
@@ -19,63 +22,117 @@ namespace Abp.Dependency.CompileTime
             object?[] arguments,
             bool wrapMethodWithMetadata = true)
         {
-            InvocationTarget = invocationTarget;
-            _method = method;
-            MethodInvocationTarget = wrapMethodWithMetadata
-                ? AbpMethodInfo.GetInvocationMethod(method)
-                : method;
-            TargetType = method.DeclaringType!;
-            Arguments = arguments;
+            Reinitialize(invocationTarget, method, arguments, wrapMethodWithMetadata);
         }
 
-        public object InvocationTarget { get; }
+        public object InvocationTarget => _invocationTarget;
 
-        public Type TargetType { get; }
+        public Type TargetType { get; private set; } = null!;
 
-        public MethodInfo MethodInvocationTarget { get; }
+        public MethodInfo MethodInvocationTarget { get; private set; } = null!;
 
         public MethodInfo Method => _method;
 
-        public object?[] Arguments { get; }
+        public object?[] Arguments => _arguments;
 
         public object? ReturnValue { get; set; }
 
         public ValueTask ValueTaskReturnValue { get; set; }
 
+        public AbpInvocationStructHolder? MixedStructHolder => _mixedStructHolder;
+
+        public void AttachMixedStructHolder(AbpInvocationStructHolder holder)
+        {
+            _mixedStructHolder = holder;
+        }
+
+        public void DetachMixedStructHolder()
+        {
+            _mixedStructHolder = null;
+        }
+
+        internal void Reinitialize(
+            object invocationTarget,
+            MethodInfo method,
+            object?[] arguments,
+            bool wrapMethodWithMetadata = true)
+        {
+            _invocationTarget = invocationTarget;
+            _method = method;
+            MethodInvocationTarget = wrapMethodWithMetadata
+                ? AbpMethodInfo.GetInvocationMethod(method)
+                : method;
+            TargetType = method.DeclaringType!;
+            _arguments = arguments;
+            ReturnValue = null;
+            ValueTaskReturnValue = default;
+            _proceedSync = null;
+            _proceedSyncWithInvocation = null;
+            _proceedAsyncWithInvocation = null;
+            _mixedStructHolder = null;
+        }
+
+        internal void ResetForPool()
+        {
+            Reinitialize(_invocationTarget, _method, _arguments, wrapMethodWithMetadata: MethodInvocationTarget != _method);
+        }
+
+        public void PrepareForCall(object?[] arguments, object? returnValue = null)
+        {
+            _arguments = arguments;
+            ReturnValue = returnValue;
+            ValueTaskReturnValue = default;
+            _proceedSync = null;
+            _proceedSyncWithInvocation = null;
+            _proceedAsyncWithInvocation = null;
+        }
+
         public void SetSyncProceed(Func<object?> proceed)
         {
-            _proceedSyncFunc = proceed;
+            _proceedSync = proceed;
+            _proceedSyncWithInvocation = null;
+            _proceedAsyncWithInvocation = null;
+        }
+
+        public void SetSyncProceed(Func<AbpInvocationCompileTime, object?> proceed)
+        {
+            _proceedSyncWithInvocation = proceed;
             _proceedSync = null;
-            _proceedAsync = null;
+            _proceedAsyncWithInvocation = null;
         }
 
         public void SetProceed(Func<Task<object?>> proceed)
         {
-            _proceedAsync = proceed;
+            SetProceed(_ => proceed());
+        }
+
+        public void SetProceed(Func<AbpInvocationCompileTime, Task<object?>> proceed)
+        {
+            _proceedAsyncWithInvocation = proceed;
             _proceedSync = null;
-            _proceedSyncFunc = null;
+            _proceedSyncWithInvocation = null;
         }
 
         public void Proceed()
         {
-            if (_proceedSyncFunc != null)
+            if (_proceedSyncWithInvocation != null)
             {
-                ReturnValue = _proceedSyncFunc();
+                ReturnValue = _proceedSyncWithInvocation(this);
                 return;
             }
 
             if (_proceedSync != null)
             {
-                _proceedSync();
+                ReturnValue = _proceedSync();
                 return;
             }
 
-            if (_proceedAsync == null)
+            if (_proceedAsyncWithInvocation == null)
             {
                 throw new InvalidOperationException("Proceed is not configured.");
             }
 
-            _proceedAsync().GetAwaiter().GetResult();
+            ReturnValue = _proceedAsyncWithInvocation(this).GetAwaiter().GetResult();
         }
 
         public IAbpProceedInfo CaptureProceedInfo() => new AbpInvocationCompileTimeProceedInfo(this);
@@ -83,19 +140,6 @@ namespace Abp.Dependency.CompileTime
         public MethodInfo GetConcreteMethod() => _method;
 
         public object? GetValueTaskReturnForCompatibility() => ValueTaskReturnValue;
-
-        public static AbpInvocationCompileTime EnsureClassBridge(
-            ref AbpInvocationStruct structInvocation,
-            ref AbpInvocationCompileTime? classBridge)
-        {
-            classBridge ??= new AbpInvocationCompileTime(
-                structInvocation.InvocationTarget,
-                structInvocation.Method,
-                structInvocation.Arguments);
-
-            classBridge.ReturnValue = structInvocation.ReturnValue;
-            return classBridge;
-        }
     }
 
     public sealed class AbpInvocationCompileTime<TResult> : AbpInvocationCompileTime,
@@ -112,6 +156,22 @@ namespace Abp.Dependency.CompileTime
 
         public new ValueTask<TResult> ValueTaskReturnValue { get; set; }
 
+        public void PrepareForCall(object?[] arguments, object? returnValue = null, ValueTask<TResult> valueTaskReturnValue = default)
+        {
+            base.PrepareForCall(arguments, returnValue);
+            ValueTaskReturnValue = valueTaskReturnValue;
+        }
+
+        internal new void Reinitialize(
+            object invocationTarget,
+            MethodInfo method,
+            object?[] arguments,
+            bool wrapMethodWithMetadata = true)
+        {
+            base.Reinitialize(invocationTarget, method, arguments, wrapMethodWithMetadata);
+            ValueTaskReturnValue = default;
+        }
+
         public Task MaterializeReturnAsTask()
         {
             if (ReturnValue is Task<TResult> task)
@@ -120,34 +180,6 @@ namespace Abp.Dependency.CompileTime
             }
 
             return AbpInvocationReturnValueMaterializer.AsTask(ValueTaskReturnValue);
-        }
-
-        public static AbpInvocationCompileTime<TResult> EnsureClassBridge(
-            ref AbpInvocationStruct<ValueTask<TResult>> structInvocation,
-            ref AbpInvocationCompileTime<TResult>? classBridge)
-        {
-            classBridge ??= new AbpInvocationCompileTime<TResult>(
-                structInvocation.InvocationTarget,
-                structInvocation.Method,
-                structInvocation.Arguments,
-                wrapMethodWithMetadata: false);
-
-            classBridge.ValueTaskReturnValue = structInvocation.ReturnValue;
-            return classBridge;
-        }
-
-        public static AbpInvocationCompileTime<TResult> EnsureClassBridge(
-            ref AbpInvocationStruct<Task<TResult>> structInvocation,
-            ref AbpInvocationCompileTime<TResult>? classBridge)
-        {
-            classBridge ??= new AbpInvocationCompileTime<TResult>(
-                structInvocation.InvocationTarget,
-                structInvocation.Method,
-                structInvocation.Arguments,
-                wrapMethodWithMetadata: false);
-
-            classBridge.ReturnValue = structInvocation.ReturnValue;
-            return classBridge;
         }
     }
 

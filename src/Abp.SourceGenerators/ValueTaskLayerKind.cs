@@ -2,7 +2,7 @@ namespace Abp.SourceGenerators;
 
 internal enum ValueTaskLayerKind
 {
-    ClassBridge,
+    ClassInvocation,
     AllocationFreeValueTask,
     AllocationFreeTaskBridge,
 }

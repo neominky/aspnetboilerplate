@@ -3,20 +3,20 @@ using Abp.Dependency;
 using Abp.Dependency.CompileTime;
 using Abp.Interception.Benchmarks.Contracts;
 
-namespace Abp.Interception.Benchmarks.Fork.Interceptors.ClassBridge;
+namespace Abp.Interception.Benchmarks.Fork.Interceptors.ClassInvocation;
 
 [AbpInterceptor(typeof(BenchmarkTrigger1Attribute))]
-public sealed class ClassBridgeBenchmarkInterceptor1 : AbpInterceptorBase, ITransientDependency
+public sealed class ClassInvocationBenchmarkInterceptor1 : AbpInterceptorBase, ITransientDependency
 {
     public override void InterceptSynchronous(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge1();
+        BenchmarkInterceptorCounters.RecordClassInvocation1();
         invocation.Proceed();
     }
 
     protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge1();
+        BenchmarkInterceptorCounters.RecordClassInvocation1();
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
         await (Task)invocation.ReturnValue!;
@@ -24,7 +24,7 @@ public sealed class ClassBridgeBenchmarkInterceptor1 : AbpInterceptorBase, ITran
 
     protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge1();
+        BenchmarkInterceptorCounters.RecordClassInvocation1();
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
         return await (Task<TResult>)invocation.ReturnValue!;
@@ -32,17 +32,17 @@ public sealed class ClassBridgeBenchmarkInterceptor1 : AbpInterceptorBase, ITran
 }
 
 [AbpInterceptor(typeof(BenchmarkTrigger2Attribute))]
-public sealed class ClassBridgeBenchmarkInterceptor2 : AbpInterceptorBase, ITransientDependency
+public sealed class ClassInvocationBenchmarkInterceptor2 : AbpInterceptorBase, ITransientDependency
 {
     public override void InterceptSynchronous(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge2();
+        BenchmarkInterceptorCounters.RecordClassInvocation2();
         invocation.Proceed();
     }
 
     protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge2();
+        BenchmarkInterceptorCounters.RecordClassInvocation2();
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
         await (Task)invocation.ReturnValue!;
@@ -50,7 +50,7 @@ public sealed class ClassBridgeBenchmarkInterceptor2 : AbpInterceptorBase, ITran
 
     protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge2();
+        BenchmarkInterceptorCounters.RecordClassInvocation2();
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
         return await (Task<TResult>)invocation.ReturnValue!;
@@ -58,17 +58,17 @@ public sealed class ClassBridgeBenchmarkInterceptor2 : AbpInterceptorBase, ITran
 }
 
 [AbpInterceptor(typeof(BenchmarkTrigger3Attribute))]
-public sealed class ClassBridgeBenchmarkInterceptor3 : AbpInterceptorBase, ITransientDependency
+public sealed class ClassInvocationBenchmarkInterceptor3 : AbpInterceptorBase, ITransientDependency
 {
     public override void InterceptSynchronous(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge3();
+        BenchmarkInterceptorCounters.RecordClassInvocation3();
         invocation.Proceed();
     }
 
     protected override async Task InternalInterceptAsynchronous(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge3();
+        BenchmarkInterceptorCounters.RecordClassInvocation3();
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
         await (Task)invocation.ReturnValue!;
@@ -76,7 +76,7 @@ public sealed class ClassBridgeBenchmarkInterceptor3 : AbpInterceptorBase, ITran
 
     protected override async Task<TResult> InternalInterceptAsynchronous<TResult>(IAbpInvocation invocation)
     {
-        BenchmarkInterceptorCounters.RecordClassBridge3();
+        BenchmarkInterceptorCounters.RecordClassInvocation3();
         var proceedInfo = invocation.CaptureProceedInfo();
         proceedInfo.Invoke();
         return await (Task<TResult>)invocation.ReturnValue!;

@@ -15,8 +15,20 @@ namespace Abp.Dependency.CompileTime
     {
         public static bool IsEnabled { get; private set; }
 
+        public static AbpBootstrapperInterceptorOptions InterceptorOptions { get; private set; } = new();
+
         public static void Enable()
         {
+            Enable(null);
+        }
+
+        public static void Enable(AbpBootstrapperInterceptorOptions? interceptorOptions)
+        {
+            if (interceptorOptions != null)
+            {
+                InterceptorOptions = interceptorOptions;
+            }
+
             if (IsEnabled)
             {
                 return;
@@ -24,6 +36,11 @@ namespace Abp.Dependency.CompileTime
 
             IsEnabled = true;
             DisableCastleDynamicProxyHandlers();
+        }
+
+        public static void ConfigureInterceptorOptions(AbpBootstrapperInterceptorOptions interceptorOptions)
+        {
+            InterceptorOptions = interceptorOptions ?? new AbpBootstrapperInterceptorOptions();
         }
 
         public static void Disable()

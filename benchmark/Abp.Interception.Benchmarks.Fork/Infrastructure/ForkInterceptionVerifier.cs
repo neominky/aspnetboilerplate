@@ -6,11 +6,11 @@ namespace Abp.Interception.Benchmarks.Fork.Infrastructure;
 internal static class ForkInterceptionVerifier
 {
     public static void Verify(
-        IClassBridgeComparisonAppService classBridge,
+        IClassInvocationComparisonAppService classInvocation,
         IAllocationFreeComparisonAppService allocationFree)
     {
-        VerifyCompileTimeWrapper(classBridge, nameof(IClassBridgeComparisonAppService));
-        InterceptionChainVerifier.VerifyClassBridge(classBridge, "Fork class-bridge");
+        VerifyCompileTimeWrapper(classInvocation, nameof(IClassInvocationComparisonAppService));
+        InterceptionChainVerifier.VerifyClassInvocation(classInvocation, "Fork class invocation");
 
         VerifyCompileTimeWrapper(allocationFree, nameof(IAllocationFreeComparisonAppService));
         InterceptionChainVerifier.VerifyAllocationFree(allocationFree, "Fork allocation-free");

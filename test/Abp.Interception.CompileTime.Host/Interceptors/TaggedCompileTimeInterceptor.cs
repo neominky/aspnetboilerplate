@@ -19,7 +19,7 @@ public sealed class TaggedAttribute : Attribute
 }
 
 /// <summary>
-/// Custom interceptor using class-bridge async paths (<see cref="AbpInterceptorBase.InternalInterceptAsynchronous(IAbpInvocation)"/>).
+/// Custom interceptor using class invocation async paths (<see cref="AbpInterceptorBase.InternalInterceptAsynchronous(IAbpInvocation)"/>).
 /// </summary>
 [AbpInterceptor(typeof(TaggedAttribute))]
 public sealed class TaggedCompileTimeInterceptor : AbpInterceptorBase, ITransientDependency
