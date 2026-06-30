@@ -27,6 +27,8 @@ public static class Program
         Console.WriteLine("Running interceptor benchmarks (separate processes — NuGet Abp and fork Abp cannot load in one process).");
         Console.WriteLine();
 
+        var benchmarkArgs = GetBenchmarkArgs(args);
+
         var exitCode = 0;
         foreach (var (title, projectPath) in projects)
         {
@@ -37,7 +39,7 @@ public static class Program
             var processStartInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = $"run --configuration {configuration} --project \"{projectPath}\" --",
+                Arguments = $"run --configuration {configuration} --project \"{projectPath}\" -- {benchmarkArgs}",
                 WorkingDirectory = solutionRoot,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -84,6 +86,33 @@ public static class Program
         }
 
         return exitCode;
+    }
+
+    private static string GetBenchmarkArgs(string[] args)
+    {
+        var forwarded = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] is "-c" or "--configuration")
+            {
+                i++;
+                continue;
+            }
+
+            forwarded.Add(args[i]);
+        }
+
+        if (forwarded.Count == 0)
+        {
+            return "--filter \"*\"";
+        }
+
+        return string.Join(' ', forwarded.Select(QuoteIfNeeded));
+    }
+
+    private static string QuoteIfNeeded(string arg)
+    {
+        return arg.Contains(' ') ? $"\"{arg}\"" : arg;
     }
 
     private static string FindSolutionRoot()
